@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme {
+  --color-space-black: #050508;
+  --color-space-dark: #0a0a12;
+  --color-space-card: #0f0f1d;
+  --color-brand-cyan: #00f3ff;
+  --color-brand-magenta: #ff007f;
+  --color-brand-violet: #8b5cf6;
+  --color-brand-amber: #f59e0b;
+  --color-brand-green: #10b981;
+  --color-glass-bg: rgba(10, 10, 18, 0.7);
+  --color-glass-border: rgba(255, 255, 255, 0.06);
+  --color-glass-border-glow: rgba(0, 243, 255, 0.2);
+
+  --animate-scanline: scanline 8s linear infinite;
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+  --animate-waveform: waveform 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.3; filter: drop-shadow(0 0 2px var(--color-brand-cyan)); }
+  50% { opacity: 0.8; filter: drop-shadow(0 0 10px var(--color-brand-cyan)); }
+}
+
+@keyframes waveform {
+  0% { transform: scaleY(0.3); }
+  100% { transform: scaleY(1); }
+}
+
+:root {
+  --background: #050508;
+  --foreground: #f3f4f6;
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #050508;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1c1c30;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a2a47;
+  border-color: var(--color-brand-cyan);
+}
+
+/* Custom Utilities for glassmorphism and glows */
+.glass-panel {
+  background: rgba(10, 10, 18, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glass-panel-glow {
+  background: rgba(10, 10, 18, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(0, 243, 255, 0.15);
+  box-shadow: 0 0 20px rgba(0, 243, 255, 0.05);
+}
+
+.text-glow-cyan {
+  text-shadow: 0 0 8px rgba(0, 243, 255, 0.5);
+}
+
+.text-glow-magenta {
+  text-shadow: 0 0 8px rgba(255, 0, 127, 0.5);
+}
+
+.bg-grid-pattern {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+}
