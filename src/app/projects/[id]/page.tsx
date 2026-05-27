@@ -28,11 +28,19 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     if (id) {
-      const data = getProjectById(id);
-      if (data) {
-        setProject(data);
-      }
-      setIsLoading(false);
+      const fetchProject = async () => {
+        try {
+          const data = await getProjectById(id);
+          if (data) {
+            setProject(data);
+          }
+        } catch (e) {
+          console.error('Failed to fetch project detail:', e);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      fetchProject();
     }
   }, [id]);
 
@@ -164,9 +172,10 @@ export default function ProjectDetailPage() {
 
             {/* Render actions panel */}
             <RenderQueuePanel
-              duration={durationSec}
-              platform={project.platform}
-              isMaxQuality={project.maxQualityMode}
+              project={project}
+              onStatusChange={(updated) => {
+                setProject(updated);
+              }}
             />
 
             {/* Full Spec sheet copy cards */}

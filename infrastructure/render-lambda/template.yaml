@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CineForge Video Render Node - Serverless Lambda Worker + FFmpeg
+
+Globals:
+  Function:
+    Timeout: 900 # 15 minutes (Max Lambda execution limit)
+    MemorySize: 3008 # 3GB allocated for heavy 1080p@60fps FFmpeg rendering
+    Runtime: nodejs20.x
+    Architectures:
+      - x86_64
+
+Resources:
+  # --- 1. DynamoDB Progress & Heartbeat Table ---
+  CineForgeProgressTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: CineForgeProgressTable
+      AttributeDefinitions:
+        - AttributeName: TaskId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: TaskId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ExpireAt
+        Enabled: true
+
+  # --- 2. Custom FFmpeg Static Layer ---
+  FfmpegLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: ffmpeg-static-layer
+      Description: Static 64-bit FFmpeg/FFprobe binaries for Amazon Linux 2 runtimes
+      ContentUri: ./layers/ffmpeg
+      CompatibleRuntimes:
+        - nodejs20.x
+
+  # --- 3. Render Worker Lambda Function ---
+  CineForgeRenderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CineForgeRenderFunction
+      Handler: dist/index.handler
+      CodeUri: ./
+      Environment:
+        Variables:
+          PROGRESS_TABLE_NAME: !Ref CineForgeProgressTable
+          PATH: /opt/bin:/usr/local/bin:/usr/bin:/bin # Ensure Layer bin is in path
+      Layers:
+        - !Ref FfmpegLayer
+      Policies:
+        # Permission to read and write to the DynamoDB progress table
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CineForgeProgressTable
+        # Permissions to read and write videos to S3
+        - S3CrudPolicy:
+            BucketName: '*'
+
+Outputs:
+  CineForgeRenderFunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt CineForgeRenderFunction.Arn
+  CineForgeProgressTableArn:
+    Description: DynamoDB Table ARN
+    Value: !GetAtt CineForgeProgressTable.Arn

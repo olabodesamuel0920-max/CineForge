@@ -14,20 +14,28 @@ export default function ProjectsDashboardPage() {
 
   // Load projects on component mount (client-side only to prevent hydration mismatches)
   useEffect(() => {
-    try {
-      const data = getProjects();
-      setProjects(data);
-    } catch (e) {
-      console.error('Error loading projects', e);
-    } finally {
-      setIsLoading(false);
-    }
+    const fetchProjects = async () => {
+      try {
+        const data = await getProjects();
+        setProjects(data);
+      } catch (e) {
+        console.error('Error loading projects', e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchProjects();
   }, []);
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this edit project and its EditDNA blueprint?')) {
-      deleteProject(id);
-      setProjects(getProjects()); // Refresh state
+      try {
+        await deleteProject(id);
+        const data = await getProjects(); // Refresh state
+        setProjects(data);
+      } catch (e) {
+        console.error('Failed to delete project', e);
+      }
     }
   };
 

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { CINEFORGE_MODES } from '@/lib/cineforgeModes';
 import { createProject } from '@/lib/projects';
 import { ProjectDuration, ProjectPlatform } from '@/types/project';
-import StudioUpload from '@/components/StudioUpload';
+import StudioUpload, { UploadedFileMetadata } from '@/components/StudioUpload';
 import MaxQualityToggle from '@/components/MaxQualityToggle';
 import EditModeCard from '@/components/EditModeCard';
 import RightsSafetyNotice from '@/components/RightsSafetyNotice';
@@ -28,9 +28,10 @@ export default function StudioPage() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleFileSelect = (filename: string, size?: string) => {
-    setMediaFilename(filename);
-    setMediaSize(size || '15.4 MB');
+  const handleFileSelect = (metadata: UploadedFileMetadata) => {
+    setMediaFilename(metadata.fileName);
+    const sizeStr = `${(metadata.fileSize / (1024 * 1024)).toFixed(1)} MB`;
+    setMediaSize(sizeStr);
     setError(null);
   };
 
@@ -39,7 +40,7 @@ export default function StudioPage() {
     setMediaSize('0 MB');
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -60,8 +61,8 @@ export default function StudioPage() {
     setIsSubmitting(true);
 
     try {
-      // Create project in localStorage and compile blueprint
-      const project = createProject({
+      // Create project in localStorage or Supabase and compile blueprint
+      const project = await createProject({
         title,
         selectedMode,
         maxQualityMode,
@@ -78,7 +79,7 @@ export default function StudioPage() {
         router.push('/projects');
       }, 1000);
     } catch (e) {
-      setError('Failed to create the project. Please check local storage capacity.');
+      setError((e as Error).message || 'Failed to create the project. Please check database configuration or local storage capacity.');
       setIsSubmitting(false);
     }
   };

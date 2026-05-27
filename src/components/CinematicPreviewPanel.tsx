@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, Grid, Volume2, VolumeX, RotateCcw } from 'lucide-react';
+import { Play, Pause, Grid, Volume2, VolumeX, RotateCcw, Video } from 'lucide-react';
 
 interface CinematicPreviewPanelProps {
   filename: string;
@@ -14,15 +14,31 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [showGrid, setShowGrid] = useState(true);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true); // Default muted to comply with browser autoplay policies
   
-  // Format aspect ratio depending on platform
+  const videoRef = useRef<HTMLVideoElement>(null);
   const isPortrait = platform !== 'YouTube';
 
-  // Tick timecode when playing
+  const isRealMedia = filename && (
+    filename.startsWith('/renders/') || 
+    filename.startsWith('/uploads/') || 
+    filename.startsWith('http') || 
+    filename.startsWith('blob:')
+  );
+
+  // Sync state if source filename changes
+  useEffect(() => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+    if (videoRef.current) {
+      videoRef.current.load();
+    }
+  }, [filename]);
+
+  // Synchronize playing ticks for mock audio visualizer fallback
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (isPlaying) {
+    if (isPlaying && !isRealMedia) {
       interval = setInterval(() => {
         setCurrentTime((prev) => {
           if (prev >= duration) {
@@ -33,33 +49,62 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
       }, 100);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, duration]);
+  }, [isPlaying, duration, isRealMedia]);
 
-  // Format timecode e.g. 00:00:04:12 (Hours:Minutes:Seconds:Frames)
-  const formatTimecode = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    const frames = Math.floor((seconds % 1) * 30); // 30 fps timecode representation
+  const handleTimeUpdate = () => {
+    if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime);
+    }
+  };
 
-    const pad = (val: number) => String(val).padStart(2, '0');
-    return `00:${pad(mins)}:${pad(secs)}:${pad(frames)}`;
+  const handleVideoEnded = () => {
+    setIsPlaying(false);
+    setCurrentTime(0);
   };
 
   const handlePlayPause = () => {
+    if (videoRef.current && isRealMedia) {
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play().catch((err) => {
+          console.warn('Playback request block:', err);
+        });
+      }
+    }
     setIsPlaying(!isPlaying);
   };
 
   const handleReset = () => {
     setCurrentTime(0);
     setIsPlaying(false);
+    if (videoRef.current && isRealMedia) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+    }
   };
 
   const handleTimelineChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCurrentTime(parseFloat(e.target.value));
+    const newTime = parseFloat(e.target.value);
+    setCurrentTime(newTime);
+    if (videoRef.current && isRealMedia) {
+      videoRef.current.currentTime = newTime;
+    }
+  };
+
+  // Format timecode e.g. 00:00:04:12 (Hours:Minutes:Seconds:Frames)
+  const formatTimecode = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    const frames = Math.floor((seconds % 1) * 30); // 30 fps representation
+
+    const pad = (val: number) => String(val).padStart(2, '0');
+    return `00:${pad(mins)}:${pad(secs)}:${pad(frames)}`;
   };
 
   return (
-    <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/30 flex flex-col gap-4">
+    <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/30 flex flex-col gap-4 relative overflow-hidden">
+      
       {/* Panel Title Header */}
       <div className="flex items-center justify-between border-b border-white/5 pb-3">
         <div className="flex items-center gap-2">
@@ -67,7 +112,7 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
           <h4 className="text-xs font-mono font-bold tracking-widest text-gray-400">CINEMATIC PREVIEW ROUTER</h4>
         </div>
         <div className="flex items-center gap-3 text-[10px] font-mono text-gray-500">
-          <span>SOURCE: {filename}</span>
+          <span className="truncate max-w-[150px] inline-block">SOURCE: {filename.split('/').pop()}</span>
           <span className="text-gray-400">|</span>
           <span className="text-brand-cyan uppercase">
             {isMaxQuality ? '4K UHD MASTER (60 FPS)' : '1080P FHD ROUGH (30 FPS)'}
@@ -77,12 +122,13 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
 
       {/* Screen Monitor Container */}
       <div className="relative bg-[#020204] rounded-lg border border-white/10 overflow-hidden flex items-center justify-center min-h-[300px] md:min-h-[380px] group">
-        {/* Dynamic scanline grid overlay simulating monitor */}
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,3px_100%] pointer-events-none z-10 opacity-30"></div>
+        
+        {/* Monitor scanline overlays */}
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,3px_100%] pointer-events-none z-20 opacity-30"></div>
         
         {/* CRT Scanline sweep animation */}
         {isPlaying && (
-          <div className="absolute top-0 left-0 w-full h-[2px] bg-brand-cyan/20 blur-[1px] animate-scanline pointer-events-none z-10"></div>
+          <div className="absolute top-0 left-0 w-full h-[2px] bg-brand-cyan/20 blur-[1px] animate-scanline pointer-events-none z-20"></div>
         )}
 
         {/* Video Canvas Backdrop Grid */}
@@ -91,13 +137,11 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
         {/* Safe-zone Grids overlay */}
         {showGrid && (
           <div className="absolute inset-0 pointer-events-none border border-white/5 z-20">
-            {/* Thirds guidelines */}
             <div className="absolute left-1/3 top-0 bottom-0 w-[1px] border-l border-dashed border-white/10"></div>
             <div className="absolute right-1/3 top-0 bottom-0 w-[1px] border-l border-dashed border-white/10"></div>
             <div className="absolute top-1/3 left-0 right-0 h-[1px] border-t border-dashed border-white/10"></div>
             <div className="absolute bottom-1/3 left-0 right-0 h-[1px] border-t border-dashed border-white/10"></div>
             
-            {/* Center crosshair */}
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center">
               <div className="w-2 h-[1px] bg-brand-cyan/40"></div>
               <div className="h-2 w-[1px] bg-brand-cyan/40 absolute"></div>
@@ -105,7 +149,7 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
           </div>
         )}
 
-        {/* Portrait/Landscape Active Aspect Ratio Frame */}
+        {/* Aspect Ratio Frame */}
         <div 
           className={`relative border border-white/20 transition-all duration-500 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col justify-between overflow-hidden bg-space-dark/80 ${
             isPortrait 
@@ -114,44 +158,58 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
           }`}
         >
           {/* Top Frame Info */}
-          <div className="p-2 flex items-center justify-between z-20 text-[9px] font-mono text-gray-400 bg-gradient-to-b from-black/80 to-transparent">
-            <span>REC</span>
+          <div className="p-2 flex items-center justify-between z-30 text-[9px] font-mono text-gray-400 bg-gradient-to-b from-black/80 to-transparent">
             <span className="flex items-center gap-1">
               <span className={`w-1.5 h-1.5 rounded-full ${isPlaying ? 'bg-red-500 animate-pulse' : 'bg-gray-600'}`}></span>
-              {formatTimecode(currentTime)}
+              REC
             </span>
+            <span>{formatTimecode(currentTime)}</span>
           </div>
 
-          {/* Center Graphic */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 select-none">
-            <span className="text-[10px] font-mono text-brand-cyan/40 tracking-widest font-bold uppercase mb-1">
-              EditDNA Visualizer
-            </span>
-            <p className="text-[11px] text-gray-500 leading-snug font-sans max-w-[140px] truncate">
-              {filename}
-            </p>
-            {isPlaying ? (
-              <div className="flex gap-1.5 mt-3 items-end h-6">
-                <span className="w-1 bg-brand-cyan animate-waveform h-4"></span>
-                <span className="w-1 bg-brand-cyan animate-waveform h-6" style={{ animationDelay: '0.2s' }}></span>
-                <span className="w-1 bg-brand-cyan animate-waveform h-3" style={{ animationDelay: '0.4s' }}></span>
-                <span className="w-1 bg-brand-cyan animate-waveform h-5" style={{ animationDelay: '0.6s' }}></span>
-              </div>
-            ) : (
-              <span className="text-[10px] text-gray-600 font-mono mt-3 uppercase tracking-wider">
-                MONITOR STANDBY
+          {/* Real Media Video tag */}
+          {isRealMedia ? (
+            <video
+              ref={videoRef}
+              src={filename}
+              className="absolute inset-0 w-full h-full object-cover z-10"
+              loop
+              muted={isMuted}
+              playsInline
+              onTimeUpdate={handleTimeUpdate}
+              onEnded={handleVideoEnded}
+            />
+          ) : (
+            /* Standby mock graphics fallback */
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 select-none font-mono">
+              <span className="text-[10px] text-brand-cyan/40 tracking-widest font-bold uppercase mb-1">
+                EditDNA Standby
               </span>
-            )}
-          </div>
+              <p className="text-[10px] text-gray-500 leading-snug max-w-[140px] truncate">
+                {filename || 'standby_channel.mp4'}
+              </p>
+              {isPlaying ? (
+                <div className="flex gap-1.5 mt-3 items-end h-6">
+                  <span className="w-1 bg-brand-cyan animate-waveform h-4"></span>
+                  <span className="w-1 bg-brand-cyan animate-waveform h-6" style={{ animationDelay: '0.2s' }}></span>
+                  <span className="w-1 bg-brand-cyan animate-waveform h-3" style={{ animationDelay: '0.4s' }}></span>
+                  <span className="w-1 bg-brand-cyan animate-waveform h-5" style={{ animationDelay: '0.6s' }}></span>
+                </div>
+              ) : (
+                <span className="text-[9px] text-gray-600 mt-3 uppercase tracking-wider">
+                  SIGNAL AWAITING RENDER
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Bottom Frame Info */}
-          <div className="p-2 flex justify-between items-center z-20 text-[9px] font-mono text-gray-400 bg-gradient-to-t from-black/80 to-transparent">
+          <div className="p-2 flex justify-between items-center z-30 text-[9px] font-mono text-gray-400 bg-gradient-to-t from-black/80 to-transparent">
             <span>{isPortrait ? '9:16 PORTRAIT' : '16:9 LANDSCAPE'}</span>
-            <span>{isMaxQuality ? '4K UHD' : '1080P'}</span>
+            <span>{isMaxQuality ? '4K MASTER' : '1080P FHD'}</span>
           </div>
         </div>
 
-        {/* Ambient background glows mirroring video play state */}
+        {/* Ambient glow mirroring video play state */}
         <div className={`absolute -inset-10 bg-radial transition-all duration-1000 opacity-20 pointer-events-none mix-blend-screen filter blur-3xl ${
           isPlaying 
             ? 'from-brand-cyan/30 via-brand-magenta/10 to-transparent scale-110' 
@@ -169,14 +227,14 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
           <input
             type="range"
             min="0"
-            max={duration}
+            max={duration || 10}
             step="0.1"
             value={currentTime}
             onChange={handleTimelineChange}
             className="flex-1 accent-brand-cyan h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer"
           />
           <span className="text-[10px] font-mono text-gray-400 w-8 text-right">
-            {duration.toFixed(1)}s
+            {(duration || 10).toFixed(1)}s
           </span>
         </div>
 
@@ -217,12 +275,14 @@ export default function CinematicPreviewPanel({ filename, duration, isMaxQuality
             </button>
 
             {/* Mute button */}
-            <button
-              onClick={() => setIsMuted(!isMuted)}
-              className="p-2 rounded-lg text-gray-400 hover:text-gray-200 transition-colors cursor-pointer"
-            >
-              {isMuted ? <VolumeX className="w-4 h-4 text-brand-magenta" /> : <Volume2 className="w-4 h-4" />}
-            </button>
+            {isRealMedia && (
+              <button
+                onClick={() => setIsMuted(!isMuted)}
+                className="p-2 rounded-lg text-gray-400 hover:text-gray-200 transition-colors cursor-pointer"
+              >
+                {isMuted ? <VolumeX className="w-4 h-4 text-brand-magenta" /> : <Volume2 className="w-4 h-4" />}
+              </button>
+            )}
           </div>
         </div>
       </div>

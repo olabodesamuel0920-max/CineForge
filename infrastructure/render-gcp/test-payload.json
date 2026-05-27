@@ -1,0 +1,32 @@
+{
+  "sourceVideoGcsUrl": "gs://local-uploads/promo.mp4",
+  "blueprint": {
+    "timeline": [
+      {
+        "start": 0,
+        "end": 3,
+        "speed": 1.0,
+        "text": "TEST HOOK"
+      },
+      {
+        "start": 3,
+        "end": 6,
+        "speed": 0.5,
+        "text": "SLOW MOTION"
+      },
+      {
+        "start": 6,
+        "end": 8,
+        "speed": 2.0,
+        "text": "FAST OUT"
+      }
+    ],
+    "color_grade": {
+      "warmth": 1.2,
+      "contrast": 1.1,
+      "saturation": 0.9
+    }
+  },
+  "outputGcsUrl": "gs://local-renders/output-test.mp4",
+  "taskId": "test-123"
+}

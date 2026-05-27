@@ -49,6 +49,17 @@ export interface Project {
   blueprint: EditDNABlueprint;
 }
 
+export interface CreateProjectInput {
+  title: string;
+  selectedMode: string;
+  maxQualityMode: boolean;
+  mediaFilename: string;
+  mediaSize?: string;
+  duration: ProjectDuration;
+  platform: ProjectPlatform;
+  prompt: string;
+}
+
 export interface CineForgeMode {
   id: string;
   name: string;

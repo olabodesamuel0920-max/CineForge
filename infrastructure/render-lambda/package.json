@@ -1,0 +1,24 @@
+{
+  "name": "cineforge-render-lambda",
+  "version": "1.0.0",
+  "description": "CineForge serverless video render worker",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "esbuild handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/index.js",
+    "test:local": "ts-node test-local.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.500.0",
+    "@aws-sdk/client-s3": "^3.500.0",
+    "@aws-sdk/lib-dynamodb": "^3.500.0",
+    "@aws-sdk/s3-request-presigner": "^3.500.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.130",
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.19.11",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
