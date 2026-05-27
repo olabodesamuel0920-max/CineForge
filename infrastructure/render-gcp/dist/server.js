@@ -71,7 +71,10 @@ const blueprintSchema = zod_1.z.object({
         resolution: zod_1.z.tuple([zod_1.z.number(), zod_1.z.number()]).optional(),
         fps: zod_1.z.number().optional(),
         codec: zod_1.z.string().optional()
-    }).optional()
+    }).optional(),
+    selected_mode: zod_1.z.string().optional(),
+    viewer_emotion: zod_1.z.string().optional(),
+    hook_intensity: zod_1.z.number().optional()
 });
 const isLocalMode = () => process.env.RENDER_MODE === 'local';
 const renderRequestSchema = zod_1.z.object({
@@ -251,7 +254,7 @@ app.post('/render', async (req, res) => {
         console.log(`[TaskId: ${taskId}] Pre-flight verification successful. Has audio: ${hasAudio}`);
         // 5. Compile FFmpeg Filter Complex
         const totalDuration = payload.blueprint.timeline.reduce((acc, block) => acc + (block.end - block.start) / block.speed, 0);
-        const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = (0, ffmpeg_1.buildFilterComplex)(payload.blueprint.timeline, payload.blueprint.color_grade, fontPath, hasAudio);
+        const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = (0, ffmpeg_1.buildFilterComplex)(payload.blueprint.timeline, payload.blueprint.color_grade, fontPath, hasAudio, payload.blueprint.selected_mode, payload.blueprint.viewer_emotion, payload.blueprint.hook_intensity);
         // Compile FFmpeg command line arguments
         const ffmpegArgs = [
             '-y',
