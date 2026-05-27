@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { CINEFORGE_MODES } from '@/lib/cineforgeModes';
 import { createProject } from '@/lib/projects';
@@ -9,7 +9,7 @@ import StudioUpload, { UploadedFileMetadata } from '@/components/StudioUpload';
 import MaxQualityToggle from '@/components/MaxQualityToggle';
 import EditModeCard from '@/components/EditModeCard';
 import RightsSafetyNotice from '@/components/RightsSafetyNotice';
-import { Sparkles, Clapperboard, FolderGit2, AlertCircle } from 'lucide-react';
+import { Sparkles, Clapperboard, FolderGit2, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function StudioPage() {
   const router = useRouter();
@@ -27,6 +27,31 @@ export default function StudioPage() {
   // Validation error state
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [tickerText, setTickerText] = useState('CONNECTING TO OUTBOUND NEURAL MODEL...');
+
+  useEffect(() => {
+    if (!isSubmitting) return;
+
+    const statuses = [
+      'CONNECTING TO OUTBOUND NEURAL MODEL...',
+      'INTERCEPTING BRAND PROMPT PARAMETERS...',
+      'DISSECTING DIRECTORIAL STYLE MATRICES...',
+      'GENERATING FRAME-BY-FRAME TIMELINE BLOCKS...',
+      'RUNNING HARDENED VALIDATION GATES...',
+      'ALIGNING TIMELINE BLOCK BOUNDARIES...',
+      'APPLYING TIMELINE TEMPO CORRECTIONS...',
+      'SYNCHRONIZING AUDIO DUCKING CODES...',
+      'SAVING COMPILATION TO STORAGE LAYER...'
+    ];
+
+    let currentIdx = 0;
+    const interval = setInterval(() => {
+      currentIdx = (currentIdx + 1) % statuses.length;
+      setTickerText(statuses[currentIdx]);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isSubmitting]);
 
   const handleFileSelect = (metadata: UploadedFileMetadata) => {
     setMediaFilename(metadata.fileName);
@@ -61,8 +86,38 @@ export default function StudioPage() {
     setIsSubmitting(true);
 
     try {
-      // Create project in localStorage or Supabase and compile blueprint
-      const project = await createProject({
+      const startTime = Date.now();
+      
+      const numericDuration = parseInt(duration, 10);
+      const matchingMode = CINEFORGE_MODES.find(m => m.id === selectedMode);
+      const emotion = matchingMode ? matchingMode.viewerEmotion : 'Neutral';
+
+      // 1. Fetch generated blueprint from API route
+      const response = await fetch('/api/blueprint/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          selectedMode,
+          viewerEmotion: emotion,
+          duration: numericDuration,
+          platform
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to generate blueprint: status ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data.success || !data.blueprint) {
+        throw new Error(data.error || 'Blueprint generation was unsuccessful.');
+      }
+
+      const generatedBlueprint = data.blueprint;
+
+      // 2. Create project in localStorage or Supabase and pass compiled blueprint
+      await createProject({
         title,
         selectedMode,
         maxQualityMode,
@@ -71,13 +126,17 @@ export default function StudioPage() {
         duration,
         platform,
         prompt
-      });
+      }, generatedBlueprint);
 
-      // Brief delay to simulate engine initialization
-      setTimeout(() => {
-        setIsSubmitting(false);
-        router.push('/projects');
-      }, 1000);
+      // Ensure loader stays visible for at least 1500ms for premium kinetic feel
+      const elapsed = Date.now() - startTime;
+      const minDelay = 1500;
+      if (elapsed < minDelay) {
+        await new Promise((resolve) => setTimeout(resolve, minDelay - elapsed));
+      }
+
+      setIsSubmitting(false);
+      router.push('/projects');
     } catch (e) {
       setError((e as Error).message || 'Failed to create the project. Please check database configuration or local storage capacity.');
       setIsSubmitting(false);
@@ -86,6 +145,52 @@ export default function StudioPage() {
 
   return (
     <div className="flex-1 bg-space-black relative py-8 px-4 sm:px-6 lg:px-8">
+      {/* Full screen dark glassmorphism loading overlay */}
+      {isSubmitting && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/75 backdrop-blur-md transition-all duration-300">
+          {/* Floating Ambient Glowing Orbs */}
+          <div className="absolute top-1/4 left-1/4 w-72 h-72 bg-brand-cyan/20 rounded-full blur-3xl animate-pulse pointer-events-none"></div>
+          <div className="absolute bottom-1/4 right-1/4 w-72 h-72 bg-brand-violet/20 rounded-full blur-3xl animate-pulse pointer-events-none"></div>
+
+          <div className="glass-panel border border-white/10 bg-space-card/60 rounded-2xl p-8 max-w-md w-full shadow-2xl relative overflow-hidden text-center flex flex-col items-center gap-6">
+            {/* Corner borders for premium tech look */}
+            <div className="absolute top-4 left-4 w-4 h-4 border-t-2 border-l-2 border-brand-cyan/60"></div>
+            <div className="absolute top-4 right-4 w-4 h-4 border-t-2 border-r-2 border-brand-cyan/60"></div>
+            <div className="absolute bottom-4 left-4 w-4 h-4 border-b-2 border-l-2 border-brand-cyan/60"></div>
+            <div className="absolute bottom-4 right-4 w-4 h-4 border-b-2 border-r-2 border-brand-cyan/60"></div>
+
+            {/* Cybernetic pulsing icon/spinner */}
+            <div className="relative w-24 h-24 flex items-center justify-center">
+              {/* Outer glowing spinning ring */}
+              <div className="absolute inset-0 rounded-full border-4 border-dashed border-brand-cyan/20 animate-[spin_8s_linear_infinite]"></div>
+              {/* Middle gradient spinning ring */}
+              <div className="absolute inset-2 rounded-full border-4 border-y-transparent border-x-brand-cyan animate-spin"></div>
+              {/* Inner pulsing orb */}
+              <div className="absolute inset-5 rounded-full bg-gradient-to-tr from-brand-cyan/20 to-brand-violet/20 flex items-center justify-center animate-pulse">
+                <Sparkles className="w-6 h-6 text-brand-cyan" />
+              </div>
+            </div>
+
+            {/* Main loading state text */}
+            <div className="space-y-2 relative z-10">
+              <h3 className="text-sm font-mono font-bold tracking-widest text-brand-cyan animate-pulse">
+                EditDNA Engine compiling cinematic structure blocks...
+              </h3>
+              <p className="text-[10px] font-mono text-gray-400">
+                PLEASE DO NOT DISCONNECT OR REFRESH
+              </p>
+            </div>
+
+            {/* Dynamic Status Ticker */}
+            <div className="w-full bg-[#050508]/80 border border-white/5 rounded-lg px-4 py-3 min-h-[44px] flex items-center justify-center">
+              <span className="text-[10px] font-mono text-brand-violet uppercase tracking-wider animate-fadeIn">
+                {tickerText}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Background ambient sweeps */}
       <div className="absolute top-10 left-10 w-96 h-96 bg-brand-cyan/5 rounded-full blur-3xl pointer-events-none"></div>
       <div className="absolute bottom-10 right-10 w-96 h-96 bg-brand-violet/5 rounded-full blur-3xl pointer-events-none"></div>

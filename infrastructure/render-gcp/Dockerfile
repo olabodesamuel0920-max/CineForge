@@ -43,6 +43,7 @@ EXPOSE 8080
 # Environment variables defaults
 ENV PORT=8080
 ENV NODE_ENV=production
+ENV RENDER_MODE=local
 
 # Start Express server
 CMD ["node", "dist/server.js"]

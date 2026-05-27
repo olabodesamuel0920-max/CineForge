@@ -11,6 +11,20 @@ import { FolderGit2, Sparkles, Plus, AlertCircle, Loader } from 'lucide-react';
 export default function ProjectsDashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showUnauthorizedToast, setShowUnauthorizedToast] = useState(false);
+
+  // Check for unauthorized access query parameter on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('error') === 'unauthorized') {
+        setShowUnauthorizedToast(true);
+        // Clear the URL parameter
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+      }
+    }
+  }, []);
 
   // Load projects on component mount (client-side only to prevent hydration mismatches)
   useEffect(() => {
@@ -46,6 +60,33 @@ export default function ProjectsDashboardPage() {
       <div className="absolute bottom-20 left-10 w-96 h-96 bg-brand-violet/5 rounded-full blur-3xl pointer-events-none"></div>
 
       <div className="max-w-7xl mx-auto flex flex-col gap-8 relative z-10">
+        {showUnauthorizedToast && (
+          <div className="relative overflow-hidden glass-panel border border-brand-magenta/30 bg-brand-magenta/10 text-white rounded-xl p-4 flex items-center justify-between gap-4 shadow-[0_0_20px_rgba(255,0,127,0.15)] backdrop-blur-md animate-in fade-in slide-in-from-top-4 duration-300">
+            {/* Ambient left border overlay */}
+            <div className="absolute left-0 top-0 bottom-0 w-1 bg-brand-magenta"></div>
+            
+            <div className="flex items-center gap-3 pl-1.5">
+              <div className="p-2 rounded-lg bg-brand-magenta/20 border border-brand-magenta/30 text-brand-magenta shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-[10px] font-extrabold tracking-widest uppercase text-brand-magenta">Security Alert</p>
+                <p className="text-xs text-gray-200 mt-0.5 font-mono font-bold">
+                  Access Denied: Unauthorized Workspace
+                </p>
+              </div>
+            </div>
+            <button 
+              onClick={() => setShowUnauthorizedToast(false)}
+              className="p-1 rounded-md text-gray-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+            >
+              <span className="sr-only">Dismiss</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
         
         {/* Dashboard Header Bar */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-5">

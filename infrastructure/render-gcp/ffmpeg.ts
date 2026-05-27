@@ -114,7 +114,9 @@ export function buildFilterComplex(
   inputHasAudio: boolean,
   selectedMode?: string,
   viewerEmotion?: string,
-  hookIntensity?: number
+  hookIntensity?: number,
+  previewStart?: number,
+  previewDuration?: number
 ): FilterComplexResult {
   const filterParts: string[] = [];
   const concatInputs: string[] = [];
@@ -122,12 +124,46 @@ export function buildFilterComplex(
   // Parse and clamp hook intensity (defaulting to 1.0 if not specified)
   const intensity = hookIntensity !== undefined ? Math.max(0.0, Math.min(2.0, hookIntensity)) : 1.0;
 
+  let conformedTimeline = timeline;
+
+  if (previewStart !== undefined && previewDuration !== undefined) {
+    const previewEnd = previewStart + previewDuration;
+    
+    // Filter and map timeline blocks to only those within the preview window
+    conformedTimeline = timeline
+      .filter((block) => {
+        return block.start < previewEnd && block.end > previewStart;
+      })
+      .map((block) => {
+        // Adjust start and end relative to previewStart
+        const start = Math.max(0, block.start - previewStart);
+        const end = Math.min(previewDuration, block.end - previewStart);
+        return {
+          ...block,
+          start,
+          end
+        };
+      });
+
+    // If no blocks overlapped, compile a default fallback block matching the preview duration
+    if (conformedTimeline.length === 0) {
+      conformedTimeline = [
+        {
+          start: 0,
+          end: previewDuration,
+          speed: 1.0,
+          text: 'CineForge Preview'
+        }
+      ];
+    }
+  }
+
   // 1. Calculate total duration and build subtitle active interval checks for audio ducking
   let totalDuration = 0;
   let currentOutputTime = 0.0;
   const duckingIntervals: string[] = [];
 
-  timeline.forEach((block) => {
+  conformedTimeline.forEach((block) => {
     const segmentDuration = (block.end - block.start) / block.speed;
     totalDuration += segmentDuration;
 
@@ -140,7 +176,7 @@ export function buildFilterComplex(
   const conditionStr = duckingIntervals.length > 0 ? duckingIntervals.join('+') : '';
 
   // 2. Process each segment's video and audio tracks
-  timeline.forEach((block, index) => {
+  conformedTimeline.forEach((block, index) => {
     const vTrimLabel = `vtrim_${index}`;
     const vConformedLabel = `vconf_${index}`;
     const vGradeLabel = `vgrade_${index}`;
@@ -216,13 +252,19 @@ export function buildFilterComplex(
   const videoMap = 'vout';
   const audioMap = 'aout';
   const aConcatLabel = 'a_primary_concat';
-  filterParts.push(`${concatInputs.join('')}concat=n=${timeline.length}:v=1:a=1[${videoMap}][${aConcatLabel}]`);
+  filterParts.push(`${concatInputs.join('')}concat=n=${conformedTimeline.length}:v=1:a=1[${videoMap}][${aConcatLabel}]`);
 
   // 3. Audio Ducking Mix Framework
+  // Extract condition and apply timeline-aware volume attenuation to soundtrack input stream [1:a]
   const bgVolumeExpr = `if(${conditionStr || '0'},0.25,1.0)`;
-  filterParts.push(`sine=frequency=220:sample_rate=44100:duration=${totalDuration.toFixed(3)}[bg_raw]`);
-  filterParts.push(`[bg_raw]volume='${bgVolumeExpr}':eval=frame[bg_ducked]`);
-  filterParts.push(`[${aConcatLabel}][bg_ducked]amix=inputs=2:normalize=0[${audioMap}]`);
+  filterParts.push(`[1:a]volume='${bgVolumeExpr}':eval=frame[ducked_music_raw]`);
+
+  // Force both audio channels through explicit sample rate conversion to 44100Hz preceding the mix graph
+  filterParts.push(`[${aConcatLabel}]aresample=44100[a_primary_resampled]`);
+  filterParts.push(`[ducked_music_raw]aresample=44100[ducked_music_resampled]`);
+
+  // Combine conformed primary audio and resampled, ducked soundtrack
+  filterParts.push(`[a_primary_resampled][ducked_music_resampled]amix=inputs=2:normalize=0[${audioMap}]`);
 
   return {
     filterComplex: filterParts.join('; '),

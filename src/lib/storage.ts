@@ -1,4 +1,4 @@
-import { Project, CreateProjectInput } from '@/types/project';
+import { Project, CreateProjectInput, EditDNABlueprint } from '@/types/project';
 import { generateEditDNABlueprint } from './blueprints';
 
 const LOCAL_STORAGE_KEY = 'cineforge_projects';
@@ -19,7 +19,7 @@ export function getLocalProjects(): Project[] {
   }
 }
 
-export function saveLocalProject(input: CreateProjectInput): Project {
+export function saveLocalProject(input: CreateProjectInput, customBlueprint?: EditDNABlueprint): Project {
   // Generate a local timestamp-based ID or random ID
   const id = Math.random().toString(36).substring(2, 11);
   const createdAt = new Date().toISOString();
@@ -31,7 +31,7 @@ export function saveLocalProject(input: CreateProjectInput): Project {
     renderEngine: 'Provider Connection Pending' as const,
   };
 
-  const blueprint = generateEditDNABlueprint(
+  const blueprint = customBlueprint || generateEditDNABlueprint(
     input.title,
     input.selectedMode,
     input.prompt,

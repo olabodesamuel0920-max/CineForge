@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { Storage } from '@google-cloud/storage';
 
 type FrontendStatus = "draft" | "uploaded" | "blueprint_ready" | "analysis_preparing" | "rendering" | "completed" | "failed";
 
@@ -54,12 +55,35 @@ export async function GET(
         ? 0
         : Math.max(1, Math.round((100 - progress) * 0.15)); // Simple linear decay estimation
 
+    // In cloud mode, dynamically compile a secure GCS presigned read URL on demand
+    let outputUrl = undefined;
+    if (!result.error) {
+      if (process.env.RENDER_MODE === 'cloud') {
+        try {
+          const bucketName = process.env.GCS_BUCKET_NAME || 'cineforge-media-bucket';
+          const storage = new Storage();
+          const file = storage.bucket(bucketName).file(`rendered/output-${id}.mp4`);
+          const [presignedUrl] = await file.getSignedUrl({
+            version: 'v4',
+            action: 'read',
+            expires: Date.now() + 60 * 60 * 1000 // 1 hour expiration
+          });
+          outputUrl = presignedUrl;
+        } catch (e) {
+          console.error('Failed to generate presigned URL for output asset:', e);
+          outputUrl = `/renders/output-${id}.mp4`; // fallback
+        }
+      } else {
+        outputUrl = `/renders/output-${id}.mp4`;
+      }
+    }
+
     return NextResponse.json({
       status,
       progress,
       estimatedTimeRemaining,
       error: result.error || undefined,
-      outputUrl: result.error ? undefined : `/renders/output-${id}.mp4`
+      outputUrl
     });
 
   } catch (error) {

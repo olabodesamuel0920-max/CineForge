@@ -16,19 +16,21 @@ export async function POST(request: Request) {
     }
 
     if (user && client) {
-      const { data: success, error: rpcError } = await client.rpc('decrement_user_credit', {
-        target_user_id: user.id
-      });
+      const { data: profile, error: profileError } = await client
+        .from('profiles')
+        .select('credits')
+        .eq('id', user.id)
+        .single();
 
-      if (rpcError) {
-        console.error('RPC decrement_user_credit failed:', rpcError.message);
+      if (profileError) {
+        console.error('Failed to query user profile for preview credits:', profileError.message);
         return NextResponse.json(
-          { error: `Database error: ${rpcError.message}` },
+          { error: `Database error: ${profileError.message}` },
           { status: 500 }
         );
       }
 
-      if (!success) {
+      if (!profile || (profile.credits ?? 0) <= 0) {
         return NextResponse.json(
           { error: 'Serverless Render Credits Exhausted. Upgrade to Premium for 50 Studio-Grade AI Exports.' },
           { status: 402 }
@@ -37,11 +39,18 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { project } = body;
+    const { project, previewStart, previewDuration } = body;
     
     if (!project || !project.id || !project.blueprint) {
       return NextResponse.json(
         { error: 'Invalid payload. Missing project metadata or blueprint registers.' },
+        { status: 400 }
+      );
+    }
+
+    if (previewStart === undefined || previewDuration === undefined) {
+      return NextResponse.json(
+        { error: 'Invalid payload. Missing previewStart or previewDuration parameters.' },
         { status: 400 }
       );
     }
@@ -61,14 +70,12 @@ export async function POST(request: Request) {
       let start = 0.0;
       let end = 5.0;
       
-      // Parse timestamp like "0.0s - 2.5s" or "2.5s - 7.0s"
       const matches = block.timestamp.match(/([\d\.]+)\s*s?\s*-\s*([\d\.]+)\s*s?/);
       if (matches) {
         start = parseFloat(matches[1]);
         end = parseFloat(matches[2]);
       }
 
-      // Map speed ramps keywords to average numeric multipliers
       let speed = 1.0;
       const speedRampLower = (block.speedRamp || '').toLowerCase();
       if (speedRampLower.includes('slow') || speedRampLower.includes('25%') || speedRampLower.includes('50%')) {
@@ -77,7 +84,6 @@ export async function POST(request: Request) {
         speed = 1.5;
       }
 
-      // Map VFX tags
       const vfx: string[] = [];
       const titleLower = (block.title || '').toLowerCase();
       const descLower = (block.description || '').toLowerCase();
@@ -119,11 +125,9 @@ export async function POST(request: Request) {
       saturation = 0.85;
     }
 
-    // 3. Map export format configurations
+    // 3. Map export format configurations (forced to libx264 for fast preview)
     const isPortrait = project.platform !== 'YouTube';
     const resolution = isPortrait ? [1080, 1920] : [1920, 1080];
-    const fps = project.maxQualityMode ? 60 : 30;
-    const codec = project.maxQualityMode ? 'hevc' : 'h264';
 
     // 4. Assemble the Zod-compatible Render Engine Payload
     const renderPayload = {
@@ -137,21 +141,23 @@ export async function POST(request: Request) {
         },
         export: {
           resolution,
-          fps,
-          codec
+          fps: 30, // forced to 30fps for preview velocity
+          codec: 'h264' // forced to libx264 for preview velocity
         },
         selected_mode: project.selectedMode,
         viewer_emotion: project.blueprint.viewerEmotion,
-        hook_intensity: project.maxQualityMode ? 1.5 : 0.8
+        hook_intensity: 0.8 // low intensity for preview
       },
       taskId: project.id,
-      outputGcsUrl: `gs://${bucketName}/rendered/output-${project.id}.mp4`
+      outputGcsUrl: `gs://${bucketName}/rendered/output-${project.id}.mp4`,
+      previewStart: parseFloat(previewStart),
+      previewDuration: parseFloat(previewDuration)
     };
 
-    console.log('Forwarding render payload to Cloud Run Render Node:', JSON.stringify(renderPayload, null, 2));
+    console.log('Forwarding preview payload to Cloud Run Render Node:', JSON.stringify(renderPayload, null, 2));
 
-    // 5. POST to Cloud Run rendering endpoint
-    const response = await fetch(`${renderNodeUrl.replace(/\/$/, '')}/render`, {
+    // 5. POST to Cloud Run preview rendering endpoint
+    const response = await fetch(`${renderNodeUrl.replace(/\/$/, '')}/render/preview`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -162,7 +168,7 @@ export async function POST(request: Request) {
     const result = await response.json();
     return NextResponse.json(result, { status: response.status });
   } catch (error) {
-    console.error('Failed to parse and proxy render request:', error);
+    console.error('Failed to parse and proxy preview render request:', error);
     return NextResponse.json(
       { error: (error as Error).message },
       { status: 500 }

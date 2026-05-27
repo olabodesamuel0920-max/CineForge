@@ -66,8 +66,12 @@ async function runLocalTest() {
     console.log('\nVerifying FFmpeg syntax correctness...');
     
     let ffmpegCmd = 'ffmpeg';
+    const lambdaBinPath = path.join(__dirname, '..', 'render-lambda', 'bin', 'ffmpeg.exe');
     const localBinPath = path.join(__dirname, 'bin', 'ffmpeg.exe');
-    if (fs.existsSync(localBinPath)) {
+    if (fs.existsSync(lambdaBinPath)) {
+      console.log(`Using lambda static FFmpeg binary at: ${lambdaBinPath}`);
+      ffmpegCmd = lambdaBinPath;
+    } else if (fs.existsSync(localBinPath)) {
       console.log(`Using local static FFmpeg binary at: ${localBinPath}`);
       ffmpegCmd = localBinPath;
     }
@@ -75,6 +79,7 @@ async function runLocalTest() {
     const verifyArgs = [
       '-loglevel', 'error',
       '-f', 'lavfi', '-i', 'color=c=black:s=1920x1080:d=10', // Simulated video only (input 0)
+      '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo:d=10', // Simulated audio soundtrack (input 1)
       '-filter_complex', result.filterComplex,
       '-map', `[${result.videoMap}]`,
       '-map', `[${result.audioMap}]`,

@@ -1,17 +1,93 @@
 "use client";
 
 import React, { useState } from 'react';
-import { TimelineBlock } from '@/types/project';
-import { Play, Eye, Volume2, Gauge, ChevronDown, ChevronUp } from 'lucide-react';
+import { TimelineBlock, Project } from '@/types/project';
+import { Play, Eye, Volume2, Gauge, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getSupabase } from '@/lib/supabase';
 
 interface BlueprintTimelineProps {
   blocks: TimelineBlock[];
   accentColor?: string; // e.g. cyan, magenta, violet
+  project?: Project;
+  onPreviewUrl?: (url: string) => void;
+  onCreditExhausted?: () => void;
 }
 
-export default function BlueprintTimeline({ blocks, accentColor = 'cyan' }: BlueprintTimelineProps) {
+export default function BlueprintTimeline({ blocks, accentColor = 'cyan', project, onPreviewUrl, onCreditExhausted }: BlueprintTimelineProps) {
   const [expandedBlock, setExpandedBlock] = useState<string | null>(blocks[0]?.id || null);
+  const [previewingBlockId, setPreviewingBlockId] = useState<string | null>(null);
+
+  const handlePreviewClick = async (block: TimelineBlock) => {
+    if (!project || !onPreviewUrl) return;
+
+    let start = 0.0;
+    let end = 2.0;
+    const matches = block.timestamp.match(/([\d\.]+)\s*s?\s*-\s*([\d\.]+)\s*s?/);
+    if (matches) {
+      start = parseFloat(matches[1]);
+      end = parseFloat(matches[2]);
+    }
+
+    const previewStart = start;
+    const previewDuration = Math.min(2.0, end - start);
+
+    setPreviewingBlockId(block.id);
+
+    try {
+      const client = getSupabase();
+      let token = '';
+      if (client) {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          token = session.access_token;
+        }
+      }
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch('/api/render/preview', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          project,
+          previewStart,
+          previewDuration
+        })
+      });
+
+      if (response.status === 402) {
+        if (onCreditExhausted) {
+          onCreditExhausted();
+        } else {
+          alert('Serverless Render Credits Exhausted. Upgrade to Premium for 50 Studio-Grade AI Exports.');
+        }
+        return;
+      }
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Failed to generate segment preview: status ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.status === 'COMPLETED' && data.outputUrl) {
+        onPreviewUrl(data.outputUrl);
+      } else {
+        throw new Error(data.error || 'Failed to render segment preview.');
+      }
+    } catch (err) {
+      console.error('Segment preview generation failed:', err);
+      alert((err as Error).message || 'Failed to compile segment preview.');
+    } finally {
+      setPreviewingBlockId(null);
+    }
+  };
 
   const getAccentClass = (color: string) => {
     switch (color) {
@@ -56,10 +132,12 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan' }: Blue
                 }`}
               >
                 <div 
-                  onClick={() => setExpandedBlock(isExpanded ? null : block.id)}
-                  className="p-3 flex items-center justify-between cursor-pointer select-none"
+                  className="p-3 flex items-center justify-between select-none"
                 >
-                  <div className="flex items-center gap-3">
+                  <div 
+                    onClick={() => setExpandedBlock(isExpanded ? null : block.id)}
+                    className="flex items-center gap-3 cursor-pointer flex-1"
+                  >
                     <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-white/5 text-gray-300">
                       {block.timestamp}
                     </span>
@@ -67,8 +145,36 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan' }: Blue
                       {block.title}
                     </span>
                   </div>
-                  <div className="text-gray-500 group-hover:text-gray-300 transition-colors">
-                    {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  <div className="flex items-center gap-4">
+                    {project && onPreviewUrl && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePreviewClick(block);
+                        }}
+                        disabled={previewingBlockId !== null}
+                        className="text-[10px] font-mono font-bold text-brand-cyan hover:text-brand-magenta transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {previewingBlockId === block.id ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>RENDERING...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>PREVIEW SEGMENT</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                    <div 
+                      onClick={() => setExpandedBlock(isExpanded ? null : block.id)}
+                      className="text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+                    >
+                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </div>
                   </div>
                 </div>
 

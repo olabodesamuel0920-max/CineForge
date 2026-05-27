@@ -5,15 +5,17 @@ import { AlertTriangle, Cpu, Share2, Loader2, Download, CheckCircle, RefreshCw }
 import { motion, AnimatePresence } from 'framer-motion';
 import { Project } from '@/types/project';
 import { updateProject } from '@/lib/projects';
+import { getSupabase } from '@/lib/supabase';
 
 interface RenderQueuePanelProps {
   project: Project;
   onStatusChange?: (updatedProject: Project) => void;
+  onCreditExhausted?: () => void;
 }
 
 type RenderStep = 'IDLE' | 'DOWNLOADING' | 'ANALYZING' | 'RENDERING' | 'UPLOADING' | 'COMPLETED' | 'FAILED';
 
-export default function RenderQueuePanel({ project, onStatusChange }: RenderQueuePanelProps) {
+export default function RenderQueuePanel({ project, onStatusChange, onCreditExhausted }: RenderQueuePanelProps) {
   const [step, setStep] = useState<RenderStep>('IDLE');
   const [percent, setPercent] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -141,16 +143,42 @@ export default function RenderQueuePanel({ project, onStatusChange }: RenderQueu
     updateParentProject('Preparing');
 
     try {
+      const client = getSupabase();
+      let token = '';
+      if (client) {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          token = session.access_token;
+        }
+      }
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch('/api/render', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ project }),
       });
 
       const data = await response.json();
       
+      if (response.status === 402) {
+        stopPolling();
+        setStep('IDLE');
+        updateParentProject('Inactive');
+        if (onCreditExhausted) {
+          onCreditExhausted();
+        } else {
+          setErrorMsg(data.error || 'Serverless Render Credits Exhausted.');
+        }
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(data.error || 'Trigger failed: Render Node rejected task.');
       }
