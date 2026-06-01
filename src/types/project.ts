@@ -18,6 +18,7 @@ export interface TimelineBlock {
   visualCue: string;
   audioAction: string;
   speedRamp: string; // e.g. "Normal", "Fast-In / Slow-Out (400% -> 100%)"
+  fracture?: boolean;
 }
 
 export interface EditDNABlueprint {

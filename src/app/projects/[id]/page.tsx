@@ -56,9 +56,15 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     if (project) {
-      setActiveVideoUrl(project.mediaFilename);
+      if (project.status.renderEngine === 'Active') {
+        setActiveVideoUrl(project.mediaFilename.startsWith('/renders/') || project.mediaFilename.startsWith('http')
+          ? project.mediaFilename
+          : `/renders/output-${project.id}.mp4`);
+      } else {
+        setActiveVideoUrl(project.mediaFilename);
+      }
     }
-  }, [project?.mediaFilename]);
+  }, [project?.mediaFilename, project?.status.renderEngine, project?.id]);
 
   useEffect(() => {
     if (id) {

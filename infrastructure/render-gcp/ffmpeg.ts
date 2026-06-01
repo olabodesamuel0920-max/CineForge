@@ -7,27 +7,14 @@ import { TimelineBlock, ColorGrade } from './types/blueprint';
  */
 export function buildAudioSpeedRampFilter(speed: number): string {
   const setptsFilter = 'asetpts=PTS-STARTPTS';
-  if (speed === 1.0) {
+  // Clamp audio speed to [0.5, 2.0] to prevent pitch collapse or FFmpeg crashes.
+  const clampedSpeed = Math.max(0.5, Math.min(2.0, speed));
+  
+  if (clampedSpeed === 1.0) {
     return setptsFilter;
   }
-
-  const filters: string[] = [setptsFilter];
-  let remaining = speed;
-
-  if (speed > 2.0) {
-    while (remaining > 2.0) {
-      filters.push('atempo=2.0');
-      remaining /= 2.0;
-    }
-  } else if (speed < 0.5) {
-    while (remaining < 0.5) {
-      filters.push('atempo=0.5');
-      remaining /= 0.5;
-    }
-  }
-
-  filters.push(`atempo=${remaining.toFixed(3)}`);
-  return filters.join(',');
+  
+  return `${setptsFilter},atempo=${clampedSpeed.toFixed(3)}`;
 }
 
 /**
@@ -184,63 +171,78 @@ export function buildFilterComplex(
     const aFinalLabel = `afinal_${index}`;
 
     const segmentDuration = (block.end - block.start) / block.speed;
+    const trimStart = block.sourceStart !== undefined ? block.sourceStart : block.start;
+    const trimEnd = block.sourceEnd !== undefined ? block.sourceEnd : block.end;
 
     // Slice and Speed Ramp video
     const videoSetpts = `(PTS-STARTPTS)*(1/${block.speed.toFixed(3)})`;
-    filterParts.push(`[0:v]trim=start=${block.start.toFixed(3)}:end=${block.end.toFixed(3)},setpts=${videoSetpts}[${vTrimLabel}]`);
+    filterParts.push(`[0:v]trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},setpts=${videoSetpts}[${vTrimLabel}]`);
 
-    // Apply Style-Specific Crop Zoom matrices or Passthrough Conformer
+    // 1. Apply Style-Specific Color Grade Filters (Pre-Scale on lower resolution)
+    const preScaleFilters: string[] = [];
     if (selectedMode === 'luxury-demon-reveal') {
-      // Luxury Demon Reveal crop zoom: scales down width/height over time based on intensity
-      filterParts.push(`[${vTrimLabel}]crop=w='iw-(t*40*${intensity.toFixed(3)})':h='ih-(t*71*${intensity.toFixed(3)})',scale=1080:1920[${vConformedLabel}]`);
+      // Teal shadows and warm highlights split-tone dark aesthetic grade
+      preScaleFilters.push(`eq=contrast=1.35:brightness=-0.07:saturation=1.25`);
+      preScaleFilters.push(`colorbalance=rm=0.08:gm=-0.04:bm=0.12:rh=0.05:gh=-0.02:bh=-0.08`);
     } else if (selectedMode === 'stadium-god-mode') {
-      // Stadium God Mode horizontal pan crop: horizontal shifting using a sine wave
-      filterParts.push(`[${vTrimLabel}]crop=w=iw-100:h=ih:x='(iw-ow)/2 + sin(t*2)*50',scale=1080:1920[${vConformedLabel}]`);
-    } else {
-      // Fallback center-crop to 9:16 portrait
-      const conformer = `scale=w='if(gte(iw/ih,1080/1920),-1,1080)':h='if(gte(iw/ih,1080/1920),1920,-1)',crop=1080:1920:(iw-1080)/2:(ih-1920)/2`;
-      filterParts.push(`[${vTrimLabel}]${conformer}[${vConformedLabel}]`);
-    }
-
-    // Apply Style-Specific Color Grade Filters
-    const gradeFilters: string[] = [];
-    if (selectedMode === 'luxury-demon-reveal') {
-      gradeFilters.push(`vignette=b='0.3*${intensity.toFixed(3)}'`);
-      gradeFilters.push(`eq=contrast=0.95:brightness=-0.05`);
-      gradeFilters.push(`colorbalance=rm=0.15:gm=-0.05:bm=-0.05`);
-    } else if (selectedMode === 'stadium-god-mode') {
-      gradeFilters.push(`colorbalance=bm=0.2:rm=-0.1`);
-      gradeFilters.push(`eq=contrast=1.15:saturation=1.3`);
+      preScaleFilters.push(`colorbalance=bm=0.2:rm=-0.1`);
+      preScaleFilters.push(`eq=contrast=1.30:brightness=-0.05:saturation=1.2`);
     } else if (selectedMode === 'sugar-storm-3d' || selectedMode === 'fashion-drop-impact') {
-      gradeFilters.push(`eq=brightness=${(0.08 * intensity).toFixed(3)}:saturation=${(1.0 + 0.3 * intensity).toFixed(3)}`);
-      gradeFilters.push(`colorbalance=rm=${(0.12 * intensity).toFixed(3)}:gm=${(0.05 * intensity).toFixed(3)}:bm=-${(0.05 * intensity).toFixed(3)}`);
-      gradeFilters.push(`unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=${(1.5 * intensity).toFixed(3)}`);
+      preScaleFilters.push(`eq=brightness=${(0.08 * intensity).toFixed(3)}:saturation=${(1.0 + 0.3 * intensity).toFixed(3)}`);
+      preScaleFilters.push(`colorbalance=rm=${(0.12 * intensity).toFixed(3)}:gm=${(0.05 * intensity).toFixed(3)}:bm=-${(0.05 * intensity).toFixed(3)}`);
+      preScaleFilters.push(`unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=${(1.5 * intensity).toFixed(3)}`);
     } else {
-      // Standard color grade fallback
       const defaultColorFilter = buildColorGradeFilter(colorGrade);
       if (defaultColorFilter) {
-        gradeFilters.push(defaultColorFilter);
+        preScaleFilters.push(defaultColorFilter);
       }
     }
 
-    if (gradeFilters.length > 0) {
-      filterParts.push(`[${vConformedLabel}]${gradeFilters.join(',')}[${vGradeLabel}]`);
+    if (preScaleFilters.length > 0) {
+      filterParts.push(`[${vTrimLabel}]${preScaleFilters.join(',')}[${vGradeLabel}]`);
     } else {
-      filterParts.push(`[${vConformedLabel}]null[${vGradeLabel}]`);
+      filterParts.push(`[${vTrimLabel}]null[${vGradeLabel}]`);
     }
 
-    // Text Overlay Layer
+    // 2. Apply Style-Specific Crop Zoom matrices or Passthrough Conformer (with fast bilinear scale flags)
+    if (selectedMode === 'luxury-demon-reveal') {
+      // Luxury Reveal crop zoom: scales down width/height over time
+      filterParts.push(`[${vGradeLabel}]crop=w='iw-(t*40*${intensity.toFixed(3)})':h='ih-(t*71*${intensity.toFixed(3)})',scale=1080:1920:flags=fast_bilinear[${vConformedLabel}]`);
+    } else if (selectedMode === 'stadium-god-mode') {
+      // Stadium God Mode horizontal shifting pan crop
+      filterParts.push(`[${vGradeLabel}]crop=w=iw-100:h=ih:x='(iw-ow)/2 + sin(t*2)*50',scale=1080:1920:flags=fast_bilinear[${vConformedLabel}]`);
+    } else {
+      // Fallback center-crop to 9:16 portrait
+      const conformer = `scale=w='if(gte(iw/ih,1080/1920),-1,1080)':h='if(gte(iw/ih,1080/1920),1920,-1)':flags=fast_bilinear,crop=1080:1920:(iw-1080)/2:(ih-1920)/2`;
+      filterParts.push(`[${vGradeLabel}]${conformer}[${vConformedLabel}]`);
+    }
+
+    // 3. Apply Style-Specific Post-Scale Filters (e.g. Vignette which requires final 9:16 borders)
+    const postScaleFilters: string[] = [];
+    if (selectedMode === 'luxury-demon-reveal') {
+      // 0.35 is perfect for 9:16 to avoid over-darkening mobile portrait edges while maintaining the high contrast style
+      postScaleFilters.push(`vignette=b='0.35*${intensity.toFixed(3)}'`);
+    }
+
+    const vPostLabel = `vpost_${index}`;
+    if (postScaleFilters.length > 0) {
+      filterParts.push(`[${vConformedLabel}]${postScaleFilters.join(',')}[${vPostLabel}]`);
+    } else {
+      filterParts.push(`[${vConformedLabel}]null[${vPostLabel}]`);
+    }
+
+    // 4. Text Overlay Layer
     if (block.text && block.text.trim()) {
       const textFilter = buildTextOverlayFilter(block.text, fontPath, segmentDuration, block.vfx, intensity);
-      filterParts.push(`[${vGradeLabel}]${textFilter}[${vFinalLabel}]`);
+      filterParts.push(`[${vPostLabel}]${textFilter}[${vFinalLabel}]`);
     } else {
-      filterParts.push(`[${vGradeLabel}]null[${vFinalLabel}]`);
+      filterParts.push(`[${vPostLabel}]null[${vFinalLabel}]`);
     }
 
     // Process Segment Audio (with silent fallback if source has no audio track)
     if (inputHasAudio) {
       const audioSpeedFilter = buildAudioSpeedRampFilter(block.speed);
-      filterParts.push(`[0:a]atrim=start=${block.start.toFixed(3)}:end=${block.end.toFixed(3)},${audioSpeedFilter}[${aFinalLabel}]`);
+      filterParts.push(`[0:a]atrim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},${audioSpeedFilter}[${aFinalLabel}]`);
     } else {
       filterParts.push(`anullsrc=r=44100:cl=stereo,atrim=end=${segmentDuration.toFixed(3)},asetpts=PTS-STARTPTS[${aFinalLabel}]`);
     }

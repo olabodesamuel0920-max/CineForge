@@ -8,6 +8,7 @@ export interface UploadedFileMetadata {
   fileName: string;
   fileSize: number;
   contentType: string;
+  duration?: number;
 }
 
 interface StudioUploadProps {
@@ -68,6 +69,26 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
     setProgress(0);
     setErrorMsg(null);
 
+    // Read video metadata (duration) in the browser
+    let videoDuration: number | undefined = undefined;
+    if (file.type.startsWith('video/')) {
+      try {
+        videoDuration = await new Promise<number>((resolve, reject) => {
+          const video = document.createElement('video');
+          video.preload = 'metadata';
+          video.src = previewUrl;
+          video.onloadedmetadata = () => {
+            resolve(video.duration);
+          };
+          video.onerror = () => {
+            reject(new Error('Failed to load video metadata in browser.'));
+          };
+        });
+      } catch (err) {
+        console.warn('Failed to extract video duration in client:', err);
+      }
+    }
+
     try {
       // Stage 2: Negotiate upload format with the Next.js API
       const negotiateResponse = await fetch('/api/upload', {
@@ -120,6 +141,7 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
         xhr.open('POST', uploadUrl);
         const form = new FormData();
         form.append('file', file);
+        form.append('fileName', fileName);
         xhr.send(form);
       } else {
         // Direct binary upload targeting GCS bucket Presigned URL
@@ -135,7 +157,8 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
         filePath,
         fileName,
         fileSize,
-        contentType
+        contentType,
+        duration: videoDuration
       };
 
       setMeta(completedMeta);

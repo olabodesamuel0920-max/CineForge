@@ -7,7 +7,8 @@ let firestoreClient: Firestore | null = null;
 const COLLECTION_NAME = process.env.PROGRESS_COLLECTION_NAME || 'CineForgeProgress';
 
 function getFirestore(): Firestore | null {
-  if (process.env.RENDER_MODE === 'local') {
+  if (process.env.RENDER_MODE !== 'cloud') {
+    process.env.RENDER_MODE = 'local';
     return null;
   }
   if (!firestoreClient) {

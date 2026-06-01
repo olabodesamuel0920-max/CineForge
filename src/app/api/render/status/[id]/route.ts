@@ -1,7 +1,30 @@
 import { NextResponse } from 'next/server';
 import { Storage } from '@google-cloud/storage';
+import { getGcsStorage } from '@/lib/gcsClient';
 
 type FrontendStatus = "draft" | "uploaded" | "blueprint_ready" | "analysis_preparing" | "rendering" | "completed" | "failed";
+
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3, delay = 200): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.status >= 500 && i < retries - 1) {
+        console.warn(`Status proxy server returned ${response.status}. Retrying (${i + 1}/${retries})...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      return response;
+    } catch (error) {
+      if (i < retries - 1) {
+        console.warn(`Status proxy fetch failed: ${(error as Error).message}. Retrying (${i + 1}/${retries})...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('Fetch failed after maximum retries');
+}
 
 export async function GET(
   request: Request,
@@ -18,12 +41,27 @@ export async function GET(
       );
     }
     
-    // Fetch current progress from the Render Node server status endpoint
-    const response = await fetch(`${renderNodeUrl.replace(/\/$/, '')}/status/${id}`, {
-      method: 'GET',
-      cache: 'no-store'
-    });
+    // Fetch current progress from the Render Node server status endpoint with retries
+    const response = await fetchWithRetry(
+      `${renderNodeUrl.replace(/\/$/, '')}/status/${id}`,
+      {
+        method: 'GET',
+        cache: 'no-store'
+      },
+      3,
+      200
+    );
     
+    if (response.status === 404) {
+      // Gracefully handle missing task (e.g. worker restarted) to prevent frontend crashes
+      return NextResponse.json({
+        status: 'failed',
+        progress: 0,
+        estimatedTimeRemaining: 0,
+        error: 'Render task not found on worker node (it may have restarted).'
+      });
+    }
+
     if (!response.ok) {
       return NextResponse.json(
         { error: `Render node status check returned status code ${response.status}` },
@@ -61,7 +99,7 @@ export async function GET(
       if (process.env.RENDER_MODE === 'cloud') {
         try {
           const bucketName = process.env.GCS_BUCKET_NAME || 'cineforge-media-bucket';
-          const storage = new Storage();
+          const storage = getGcsStorage();
           const file = storage.bucket(bucketName).file(`rendered/output-${id}.mp4`);
           const [presignedUrl] = await file.getSignedUrl({
             version: 'v4',

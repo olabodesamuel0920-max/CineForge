@@ -5,6 +5,10 @@ export interface TimelineBlock {
   speed: number;
   vfx?: string[];
   text?: string;
+  sourceStart?: number;
+  sourceEnd?: number;
+  fracture?: boolean;
+  speedRamp?: string;
 }
 
 export interface AudioConfig {

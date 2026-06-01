@@ -23,6 +23,7 @@ export default function StudioPage() {
   const [platform, setPlatform] = useState<ProjectPlatform>('TikTok');
   const [mediaFilename, setMediaFilename] = useState<string | null>(null);
   const [mediaSize, setMediaSize] = useState<string>('0 MB');
+  const [videoDuration, setVideoDuration] = useState<number | undefined>(undefined);
   
   // Validation error state
   const [error, setError] = useState<string | null>(null);
@@ -57,12 +58,14 @@ export default function StudioPage() {
     setMediaFilename(metadata.fileName);
     const sizeStr = `${(metadata.fileSize / (1024 * 1024)).toFixed(1)} MB`;
     setMediaSize(sizeStr);
+    setVideoDuration(metadata.duration);
     setError(null);
   };
 
   const handleClearFile = () => {
     setMediaFilename(null);
     setMediaSize('0 MB');
+    setVideoDuration(undefined);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -101,7 +104,8 @@ export default function StudioPage() {
           selectedMode,
           viewerEmotion: emotion,
           duration: numericDuration,
-          platform
+          platform,
+          videoDuration
         })
       });
 

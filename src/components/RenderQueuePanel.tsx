@@ -64,13 +64,18 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
   const startPolling = () => {
     if (pollIntervalRef.current) return;
 
+    let consecutiveFailures = 0;
+
     pollIntervalRef.current = setInterval(async () => {
       try {
         const res = await fetch(`/api/render/status/${project.id}`);
         if (!res.ok) {
-          throw new Error(`Status polling HTTP error: ${res.status}`);
+          throw new Error(`HTTP status ${res.status}`);
         }
         const data = await res.json();
+        
+        // Reset consecutive failures on success
+        consecutiveFailures = 0;
         
         const nextPercent = data.progress ?? 0;
         const nextStatus = data.status ?? 'analysis_preparing';
@@ -86,7 +91,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
           stopPolling();
           
           // Trigger dynamic parent page path switch: raw asset -> output-rendered file
-          updateParentProject('Active', `/renders/output-${project.id}.mp4`);
+          updateParentProject('Active');
         } else if (nextStatus === 'failed') {
           setStep('FAILED');
           setErrorMsg(nextError || 'Rendering process aborted unexpectedly.');
@@ -98,7 +103,15 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
           setStep(nextPercent >= 95 ? 'UPLOADING' : 'RENDERING');
         }
       } catch (err) {
-        console.error('Polling cycle error:', err);
+        consecutiveFailures++;
+        console.warn(`Polling attempt failed (${consecutiveFailures}/5):`, err);
+        
+        if (consecutiveFailures >= 5) {
+          stopPolling();
+          setStep('FAILED');
+          setErrorMsg(`Status polling connection failed repeatedly: ${(err as Error).message}`);
+          updateParentProject('Inactive');
+        }
       }
     }, 2000); // Poll every 2 seconds
   };
@@ -111,12 +124,10 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
   };
 
   const updateParentProject = async (
-    renderEngineState: 'Active' | 'Preparing' | 'Provider Connection Pending' | 'Inactive',
-    customFilename?: string
+    renderEngineState: 'Active' | 'Preparing' | 'Provider Connection Pending' | 'Inactive'
   ) => {
     const updated: Project = {
       ...project,
-      mediaFilename: customFilename || project.mediaFilename,
       status: {
         ...project.status,
         renderEngine: renderEngineState
@@ -341,7 +352,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
               onClick={() => {
                 setStep('IDLE');
                 setPercent(0);
-                updateParentProject('Provider Connection Pending', project.mediaFilename.replace('/renders/output-', '').replace('.mp4', ''));
+                updateParentProject('Provider Connection Pending');
               }}
               className="w-full py-2 border border-white/5 bg-white/[0.02] text-gray-400 hover:text-white rounded text-center flex items-center justify-center gap-1.5 transition-all text-[11px]"
             >

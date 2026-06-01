@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Storage } from '@google-cloud/storage';
+import { getGcsStorage } from '@/lib/gcsClient';
 
 const MAX_SIZE_LIMIT = 100 * 1024 * 1024; // 100MB limit
 
@@ -10,9 +11,13 @@ function getStorageClient(): Storage | null {
   if (process.env.RENDER_MODE === 'local') {
     return null;
   }
+  const hasGcsKeys = process.env.GCP_PROJECT_ID && process.env.GCP_CLIENT_EMAIL && process.env.GCP_PRIVATE_KEY;
+  if (process.env.RENDER_MODE !== 'cloud' && !hasGcsKeys) {
+    return null;
+  }
   if (!storageClient) {
     try {
-      storageClient = new Storage();
+      storageClient = getGcsStorage();
     } catch (e) {
       console.warn('GCS Storage initialization failed. Defaulting upload route to local mode.', e);
       return null;
@@ -92,25 +97,38 @@ export async function POST(request: Request) {
         });
       } else {
         // Cloud Mode: Generate GCP V4 Presigned PUT URL
-        const bucketName = process.env.GCS_BUCKET_NAME || 'cineforge-media-bucket';
-        const file = storage.bucket(bucketName).file(`raw/${sanitizedName}`);
+        try {
+          const bucketName = process.env.GCS_BUCKET_NAME || 'cineforge-media-bucket';
+          const file = storage.bucket(bucketName).file(`raw/${sanitizedName}`);
 
-        const [uploadUrl] = await file.getSignedUrl({
-          version: 'v4',
-          action: 'write',
-          expires: Date.now() + 15 * 60 * 1000, // 15 minutes expiration
-          contentType: contentType
-        });
+          const [uploadUrl] = await file.getSignedUrl({
+            version: 'v4',
+            action: 'write',
+            expires: Date.now() + 15 * 60 * 1000, // 15 minutes expiration
+            contentType: contentType
+          });
 
-        return NextResponse.json({
-          success: true,
-          mode: 'cloud',
-          uploadUrl,
-          filePath: `gs://${bucketName}/raw/${sanitizedName}`,
-          fileName: sanitizedName,
-          fileSize,
-          contentType
-        });
+          return NextResponse.json({
+            success: true,
+            mode: 'cloud',
+            uploadUrl,
+            filePath: `gs://${bucketName}/raw/${sanitizedName}`,
+            fileName: sanitizedName,
+            fileSize,
+            contentType
+          });
+        } catch (e) {
+          console.warn('GCS Presigned URL generation failed. Defaulting upload route to local mode.', e);
+          return NextResponse.json({
+            success: true,
+            mode: 'local',
+            uploadUrl: '/api/upload',
+            filePath: `/uploads/${sanitizedName}`,
+            fileName: sanitizedName,
+            fileSize,
+            contentType
+          });
+        }
       }
     }
 
@@ -118,6 +136,7 @@ export async function POST(request: Request) {
     if (contentTypeHeader.includes('multipart/form-data')) {
       const formData = await request.formData();
       const file = formData.get('file') as File;
+      const explicitFileName = formData.get('fileName') as string | null;
 
       if (!file) {
         return NextResponse.json({ error: 'Multipart parameter error: Missing file field.' }, { status: 400 });
@@ -134,7 +153,7 @@ export async function POST(request: Request) {
         );
       }
 
-      const sanitizedName = getSanitizedFilename(file.name);
+      const sanitizedName = explicitFileName || getSanitizedFilename(file.name);
       
       // Ensure target public/uploads directory exists
       const uploadDir = path.join(process.cwd(), 'public', 'uploads');

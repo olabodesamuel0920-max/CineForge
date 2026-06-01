@@ -5,7 +5,8 @@ import * as path from 'path';
 let storageClient: Storage | null = null;
 
 function getStorage(): Storage | null {
-  if (process.env.RENDER_MODE === 'local') {
+  if (process.env.RENDER_MODE !== 'cloud') {
+    process.env.RENDER_MODE = 'local';
     return null;
   }
   if (!storageClient) {

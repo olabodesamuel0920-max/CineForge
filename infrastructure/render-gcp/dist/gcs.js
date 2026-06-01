@@ -42,7 +42,8 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 let storageClient = null;
 function getStorage() {
-    if (process.env.RENDER_MODE === 'local') {
+    if (process.env.RENDER_MODE !== 'cloud') {
+        process.env.RENDER_MODE = 'local';
         return null;
     }
     if (!storageClient) {
@@ -86,11 +87,14 @@ async function downloadFromGcs(gcsUri, destPath, maxRetries = 3, baseDelayMs = 1
         if (sourcePath.startsWith('gs://')) {
             // In local mode, treat gs://bucket/filename as just filename in public/uploads/ or root workspace
             const filename = path.basename(sourcePath);
-            const workspaceRoot = path.join(__dirname, '..', '..');
+            const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+            const targetDir = (!fs.existsSync(uploadsDir) && fs.existsSync(path.join(process.cwd(), '..', '..', 'public', 'uploads')))
+                ? path.join(process.cwd(), '..', '..', 'public', 'uploads')
+                : uploadsDir;
             const pathsToCheck = [
-                path.join(workspaceRoot, 'public', 'uploads', filename),
-                path.join(workspaceRoot, 'public', filename),
-                path.join(workspaceRoot, filename)
+                path.join(targetDir, filename),
+                path.join(path.dirname(targetDir), filename),
+                path.join(path.dirname(path.dirname(targetDir)), filename)
             ];
             let found = false;
             for (const p of pathsToCheck) {
@@ -142,12 +146,14 @@ async function uploadToGcs(localFilePath, targetGcsUri, contentType = 'video/mp4
         // Map gs:// or output key to public/renders
         if (destinationPath.startsWith('gs://') || destinationPath.includes('output-')) {
             const filename = path.basename(destinationPath);
-            const workspaceRoot = path.join(__dirname, '..', '..');
-            const rendersDir = path.join(workspaceRoot, 'public', 'renders');
-            if (!fs.existsSync(rendersDir)) {
-                fs.mkdirSync(rendersDir, { recursive: true });
+            const rendersDir = path.join(process.cwd(), 'public', 'renders');
+            const targetRendersDir = (!fs.existsSync(rendersDir) && fs.existsSync(path.join(process.cwd(), '..', '..', 'public', 'renders')))
+                ? path.join(process.cwd(), '..', '..', 'public', 'renders')
+                : rendersDir;
+            if (!fs.existsSync(targetRendersDir)) {
+                fs.mkdirSync(targetRendersDir, { recursive: true });
             }
-            destinationPath = path.join(rendersDir, filename);
+            destinationPath = path.join(targetRendersDir, filename);
         }
         fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
         fs.copyFileSync(localFilePath, destinationPath);

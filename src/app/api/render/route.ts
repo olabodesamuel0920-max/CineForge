@@ -56,6 +56,13 @@ export async function POST(request: Request) {
       );
     }
 
+    const STRUCTURAL_TITLE_PATTERN = /^(intro|detail|energy|thematic|visual|narrative|hook|sequence|build|rise|drop|climax|cta|loop|seamless)/i;
+
+    function cleanTitle(title?: string): string | undefined {
+      if (!title) return undefined;
+      return STRUCTURAL_TITLE_PATTERN.test(title.trim()) ? undefined : title.toUpperCase();
+    }
+
     // 1. Map human-readable timeline blocks to engine-executable segments
     const timeline = project.blueprint.timelineBlocks.map((block: any) => {
       let start = 0.0;
@@ -71,10 +78,16 @@ export async function POST(request: Request) {
       // Map speed ramps keywords to average numeric multipliers
       let speed = 1.0;
       const speedRampLower = (block.speedRamp || '').toLowerCase();
-      if (speedRampLower.includes('slow') || speedRampLower.includes('25%') || speedRampLower.includes('50%')) {
+      if (speedRampLower.includes('25%') || speedRampLower.includes('quarter')) {
+        speed = 0.25;
+      } else if (speedRampLower.includes('50%') || speedRampLower.includes('half') || speedRampLower.includes('slow')) {
         speed = 0.5;
-      } else if (speedRampLower.includes('fast') || speedRampLower.includes('200%') || speedRampLower.includes('300%')) {
-        speed = 1.5;
+      } else if (speedRampLower.includes('400%') || speedRampLower.includes('hyper')) {
+        speed = 4.0;
+      } else if (speedRampLower.includes('300%')) {
+        speed = 3.0;
+      } else if (speedRampLower.includes('200%') || speedRampLower.includes('fast')) {
+        speed = 2.0;
       }
 
       // Map VFX tags
@@ -94,8 +107,10 @@ export async function POST(request: Request) {
         start,
         end,
         speed,
-        text: block.title ? block.title.toUpperCase() : 'CINEFORGE SHOT',
-        vfx: vfx.length > 0 ? vfx : undefined
+        text: cleanTitle(block.title),
+        vfx: vfx.length > 0 ? vfx : undefined,
+        fracture: block.fracture ?? false,
+        speedRamp: block.speedRamp || ''
       };
     });
 
