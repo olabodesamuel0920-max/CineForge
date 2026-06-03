@@ -114,7 +114,7 @@ export default function ProjectsDashboardPage() {
             <span>Scanning local database registers...</span>
           </div>
         ) : projects.length === 0 ? (
-          <div className="glass-panel rounded-xl p-12 border border-white/5 bg-space-card/20 text-center max-w-2xl mx-auto my-8 flex flex-col items-center gap-4 relative overflow-hidden">
+          <div className="glass-panel rounded-xl p-6 sm:p-12 border border-white/5 bg-space-card/20 text-center max-w-2xl mx-auto my-8 flex flex-col items-center gap-4 relative overflow-hidden">
             {/* Ambient scanner detail inside empty state */}
             <div className="absolute top-2 left-2 w-2 h-2 border-t border-l border-white/10"></div>
             <div className="absolute top-2 right-2 w-2 h-2 border-t border-r border-white/10"></div>
@@ -130,12 +130,20 @@ export default function ProjectsDashboardPage() {
               </p>
             </div>
 
-            <Link
-              href="/studio"
-              className="mt-2 px-5 py-2.5 rounded-lg bg-white/5 border border-white/10 text-xs font-semibold uppercase tracking-wider text-gray-300 hover:bg-white/10 hover:text-brand-cyan transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-brand-cyan animate-pulse" /> Enter CineForge Studio
-            </Link>
+            <div className="flex flex-col sm:flex-row gap-3 mt-4 relative z-20">
+              <Link
+                href="/examples"
+                className="px-5 py-2.5 rounded-lg bg-gradient-to-r from-brand-cyan to-brand-violet hover:from-brand-cyan hover:to-brand-magenta text-space-black font-extrabold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(0,243,255,0.15)] cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 text-space-black" /> Explore Style Presets
+              </Link>
+              <Link
+                href="/studio"
+                className="px-5 py-2.5 rounded-lg bg-white/5 border border-white/10 text-xs font-semibold uppercase tracking-wider text-gray-300 hover:bg-white/10 hover:text-brand-cyan transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Enter Custom Studio
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

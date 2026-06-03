@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { Storage } from '@google-cloud/storage';
 import { getGcsStorage } from '@/lib/gcsClient';
 
-type FrontendStatus = "draft" | "uploaded" | "blueprint_ready" | "analysis_preparing" | "rendering" | "completed" | "failed";
+type FrontendStatus = "draft" | "uploaded" | "blueprint_ready" | "analysis_preparing" | "rendering" | "completed" | "failed" | "queued";
 
 async function fetchWithRetry(url: string, options: RequestInit, retries = 3, delay = 200): Promise<Response> {
   for (let i = 0; i < retries; i++) {
@@ -80,6 +80,8 @@ export async function GET(
       status = 'completed';
     } else if (backendStatus === 'FAILED') {
       status = 'failed';
+    } else if (backendStatus.startsWith('QUEUED')) {
+      status = 'queued';
     } else if (backendStatus === 'DOWNLOADING' || backendStatus === 'ANALYZING') {
       status = 'analysis_preparing';
     } else if (backendStatus === 'RENDERING' || backendStatus === 'UPLOADING') {
@@ -87,11 +89,16 @@ export async function GET(
     }
 
     // Estimate remaining time (seconds) - standard render duration is approximately 12-15 seconds
-    const estimatedTimeRemaining = status === 'completed'
+    let estimatedTimeRemaining = status === 'completed'
       ? 0
       : status === 'failed'
         ? 0
         : Math.max(1, Math.round((100 - progress) * 0.15)); // Simple linear decay estimation
+
+    if (status === 'queued') {
+      const pos = result.queuePosition || 1;
+      estimatedTimeRemaining = pos * 90; // 90 seconds per queued job
+    }
 
     // In cloud mode, dynamically compile a secure GCS presigned read URL on demand
     let outputUrl = undefined;
@@ -121,7 +128,9 @@ export async function GET(
       progress,
       estimatedTimeRemaining,
       error: result.error || undefined,
-      outputUrl
+      outputUrl,
+      diagnostics: result.diagnostics,
+      queuePosition: result.queuePosition
     });
 
   } catch (error) {

@@ -9,6 +9,8 @@ export interface UploadedFileMetadata {
   fileSize: number;
   contentType: string;
   duration?: number;
+  sourceType?: 'upload' | 'demo';
+  sourceUrl?: string;
 }
 
 interface StudioUploadProps {
@@ -42,12 +44,45 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
     };
   }, [objectUrl]);
 
-  // Sync state if parent clears it
+  // Sync state if parent clears it or stages demo video
   useEffect(() => {
     if (!selectedFilename && status === 'COMPLETED') {
       resetUpload();
+    } else if (selectedFilename === 'promo.mp4' && status !== 'COMPLETED') {
+      const demoMeta: UploadedFileMetadata = {
+        filePath: '/uploads/promo.mp4',
+        fileName: 'promo.mp4',
+        fileSize: 247582,
+        contentType: 'video/mp4',
+        duration: 15,
+        sourceType: 'demo',
+        sourceUrl: '/uploads/promo.mp4'
+      };
+      setObjectUrl('/uploads/promo.mp4');
+      setMeta(demoMeta);
+      setStatus('COMPLETED');
     }
-  }, [selectedFilename]);
+  }, [selectedFilename, status]);
+
+  const handleUseDemo = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const demoMeta: UploadedFileMetadata = {
+      filePath: '/uploads/promo.mp4',
+      fileName: 'promo.mp4',
+      fileSize: 247582,
+      contentType: 'video/mp4',
+      duration: 15,
+      sourceType: 'demo',
+      sourceUrl: '/uploads/promo.mp4'
+    };
+    
+    setObjectUrl('/uploads/promo.mp4');
+    setMeta(demoMeta);
+    setStatus('COMPLETED');
+    onFileSelect(demoMeta);
+  };
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -253,6 +288,15 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
           <p className="text-[11px] text-gray-500 mt-2 max-w-xs leading-normal">
             Supports MP4, MOV, WebM, PNG, JPG (Max 100MB). Video files auto-analyze for cinematic flow cues.
           </p>
+          <div className="mt-4 flex items-center justify-center relative z-20">
+            <button
+              type="button"
+              onClick={handleUseDemo}
+              className="px-4 py-1.5 rounded-lg border border-brand-cyan/30 bg-brand-cyan/10 hover:bg-brand-cyan/20 text-brand-cyan font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer"
+            >
+              Use Demo Video
+            </button>
+          </div>
         </div>
       )}
 

@@ -13,7 +13,7 @@ interface RenderQueuePanelProps {
   onCreditExhausted?: () => void;
 }
 
-type RenderStep = 'IDLE' | 'DOWNLOADING' | 'ANALYZING' | 'RENDERING' | 'UPLOADING' | 'COMPLETED' | 'FAILED';
+type RenderStep = 'IDLE' | 'QUEUED' | 'DOWNLOADING' | 'ANALYZING' | 'RENDERING' | 'UPLOADING' | 'COMPLETED' | 'FAILED';
 
 export default function RenderQueuePanel({ project, onStatusChange, onCreditExhausted }: RenderQueuePanelProps) {
   const [step, setStep] = useState<RenderStep>('IDLE');
@@ -21,6 +21,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [estTime, setEstTime] = useState<number>(0);
+  const [queuePosition, setQueuePosition] = useState<number | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Sync state from project on mount or project changes
@@ -84,7 +85,8 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
         setPercent(nextPercent);
         setEstTime(data.estimatedTimeRemaining ?? 0);
         setErrorMsg(nextError);
-
+        setQueuePosition(data.queuePosition ?? null);
+        
         if (nextStatus === 'completed') {
           setStep('COMPLETED');
           setOutputUrl(data.outputUrl || `/renders/output-${project.id}.mp4`);
@@ -97,6 +99,8 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
           setErrorMsg(nextError || 'Rendering process aborted unexpectedly.');
           stopPolling();
           updateParentProject('Inactive');
+        } else if (nextStatus === 'queued') {
+          setStep('QUEUED');
         } else if (nextStatus === 'analysis_preparing') {
           setStep(nextPercent > 2 ? 'ANALYZING' : 'DOWNLOADING');
         } else if (nextStatus === 'rendering') {
@@ -109,7 +113,12 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
         if (consecutiveFailures >= 5) {
           stopPolling();
           setStep('FAILED');
-          setErrorMsg(`Status polling connection failed repeatedly: ${(err as Error).message}`);
+          const errMsg = (err as Error).message;
+          if (errMsg.includes('fetch failed') || errMsg.includes('connection') || errMsg.includes('ECONNREFUSED')) {
+            setErrorMsg('Status polling connection failed. The render worker node appears to have disconnected. Please ensure the rendering worker is running (run "npm run dev" inside "infrastructure/render-gcp").');
+          } else {
+            setErrorMsg(`Status polling connection failed repeatedly: ${errMsg}`);
+          }
           updateParentProject('Inactive');
         }
       }
@@ -198,7 +207,12 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
     } catch (err) {
       stopPolling();
       setStep('FAILED');
-      setErrorMsg((err as Error).message);
+      const errMsg = (err as Error).message;
+      if (errMsg.includes('fetch failed') || errMsg.includes('connection') || errMsg.includes('ECONNREFUSED') || errMsg.includes('rejected task') || errMsg.includes('failed to fetch')) {
+        setErrorMsg('Could not connect to the local render worker. Please make sure the rendering server is running on http://localhost:8080. If running locally, run: "npm run dev" inside the "infrastructure/render-gcp" directory.');
+      } else {
+        setErrorMsg(errMsg);
+      }
       updateParentProject('Inactive');
     }
   };
@@ -220,9 +234,12 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
               ? 'text-brand-magenta bg-brand-magenta/10 border-brand-magenta/20'
               : step === 'IDLE'
                 ? 'text-brand-cyan bg-brand-cyan/10 border-brand-cyan/20'
-                : 'text-brand-amber bg-brand-amber/10 border-brand-amber/20 animate-pulse'
+                : step === 'QUEUED'
+                  ? 'text-brand-cyan bg-brand-cyan/10 border-brand-cyan/20'
+                  : 'text-brand-amber bg-brand-amber/10 border-brand-amber/20 animate-pulse'
         }`}>
           {step === 'IDLE' && 'READY'}
+          {step === 'QUEUED' && 'QUEUED'}
           {step === 'DOWNLOADING' && 'PRE-FETCHING'}
           {step === 'ANALYZING' && 'ANALYZING'}
           {step === 'RENDERING' && `PROCESSING ${percent}%`}
@@ -272,9 +289,12 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
 
             <button
               onClick={triggerRender}
-              className="w-full py-2.5 rounded-lg bg-gradient-to-r from-brand-cyan to-brand-violet hover:from-brand-cyan hover:to-brand-magenta text-space-black font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(0,243,255,0.15)] cursor-pointer active:scale-[0.98]"
+              className={`w-full py-3 rounded-lg bg-gradient-to-r from-brand-cyan to-brand-violet hover:from-brand-cyan hover:to-brand-magenta text-space-black font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(0,243,255,0.25)] cursor-pointer active:scale-[0.98] ${
+                project.sourceType === 'demo' ? 'border border-brand-cyan/35 animate-pulse' : ''
+              }`}
             >
-              <Share2 className="w-4 h-4" /> Dispatch Render Job
+              <Share2 className="w-4.5 h-4.5 text-space-black" />
+              {project.sourceType === 'demo' ? 'Render This Demo' : 'Dispatch Render Job'}
             </button>
           </motion.div>
         )}
@@ -292,6 +312,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
             <div className="flex items-center justify-between text-gray-300">
               <span className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-brand-cyan" />
+                {step === 'QUEUED' && `Queued | Position: ${queuePosition ?? 1}`}
                 {step === 'DOWNLOADING' && 'Fetching source video...'}
                 {step === 'ANALYZING' && 'Running resolution pre-flights...'}
                 {step === 'RENDERING' && 'FFmpeg compiling filter graphs...'}
@@ -313,7 +334,11 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
             <div className="flex justify-between items-center text-[10px] text-gray-500 mt-1">
               <span>Mode: <code className="text-brand-cyan">local-proxy</code></span>
               {estTime > 0 && (
-                <span>Est. Remaining: <strong className="text-gray-300">{estTime}s</strong></span>
+                <span>
+                  {step === 'QUEUED'
+                    ? `Estimated wait: ~${Math.ceil(estTime / 60)}m`
+                    : `Est. Remaining: ${estTime}s`}
+                </span>
               )}
             </div>
           </motion.div>

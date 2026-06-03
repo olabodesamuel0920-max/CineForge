@@ -88,7 +88,7 @@ export default function BeatMapPreview({ duration, blocks, accentColor = 'cyan' 
           {waveformBars.map((bar, i) => (
             <div 
               key={i} 
-              className={`w-[1%] min-w-[2px] rounded-full transition-all duration-300 z-10 ${
+              className={`group w-[1%] min-w-[2px] rounded-full transition-all duration-300 z-10 ${
                 bar.isBeatMarker 
                   ? `${getColors(accentColor, true)} w-[1.5%] h-full` 
                   : `${getColors(accentColor, false)}`

@@ -206,8 +206,8 @@ export function buildFilterComplex(
 
     // 2. Apply Style-Specific Crop Zoom matrices or Passthrough Conformer (with fast bilinear scale flags)
     if (selectedMode === 'luxury-demon-reveal') {
-      // Luxury Reveal crop zoom: scales down width/height over time
-      filterParts.push(`[${vGradeLabel}]crop=w='iw-(t*40*${intensity.toFixed(3)})':h='ih-(t*71*${intensity.toFixed(3)})',scale=1080:1920:flags=fast_bilinear[${vConformedLabel}]`);
+      // Luxury Reveal crop pan: slow cinematic drift over time with tight cropping
+      filterParts.push(`[${vGradeLabel}]crop=w=iw-120:h=ih-213:x='(iw-ow)/2':y='(ih-oh)/2 - (t*12*${intensity.toFixed(3)})',scale=1080:1920:flags=fast_bilinear[${vConformedLabel}]`);
     } else if (selectedMode === 'stadium-god-mode') {
       // Stadium God Mode horizontal shifting pan crop
       filterParts.push(`[${vGradeLabel}]crop=w=iw-100:h=ih:x='(iw-ow)/2 + sin(t*2)*50',scale=1080:1920:flags=fast_bilinear[${vConformedLabel}]`);
@@ -220,8 +220,8 @@ export function buildFilterComplex(
     // 3. Apply Style-Specific Post-Scale Filters (e.g. Vignette which requires final 9:16 borders)
     const postScaleFilters: string[] = [];
     if (selectedMode === 'luxury-demon-reveal') {
-      // 0.35 is perfect for 9:16 to avoid over-darkening mobile portrait edges while maintaining the high contrast style
-      postScaleFilters.push(`vignette=b='0.35*${intensity.toFixed(3)}'`);
+      // PI/(3 + intensity) is perfect to avoid over-darkening mobile portrait edges while maintaining style
+      postScaleFilters.push(`vignette=angle='PI/(3 + ${intensity.toFixed(3)})'`);
     }
 
     const vPostLabel = `vpost_${index}`;

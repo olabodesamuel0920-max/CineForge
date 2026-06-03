@@ -7,6 +7,7 @@ import { downloadFromGcs, uploadToGcs, generateGcsSignedUrl } from './gcs';
 import { buildFilterComplex } from './ffmpeg';
 import { updateProgress, getProgress } from './firestore';
 import { extractAudioTransients } from './audioAnalysis';
+import { renderQueueManager, RenderJob } from './queue';
 
 if (process.env.RENDER_MODE !== 'cloud') {
   process.env.RENDER_MODE = 'local';
@@ -295,11 +296,12 @@ function hashString(str: string): number {
 async function runFfmpegWithProgress(
   args: string[],
   totalDuration: number,
-  taskId: string
+  job: RenderJob
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const ffmpegCmd = getFfmpegCommand();
     const ffmpegProcess = spawn(ffmpegCmd, args);
+    job.process = ffmpegProcess;
     let errorLog = '';
 
     ffmpegProcess.stderr.on('data', (data) => {
@@ -312,397 +314,180 @@ async function runFfmpegWithProgress(
         const elapsed = parseTimeToSeconds(timeMatch[1]);
         // Map render progress to 5% - 95% range
         const percent = Math.min(95, Math.round((elapsed / totalDuration) * 90) + 5);
-        updateProgress(taskId, percent, 'RENDERING').catch(console.error);
+        renderQueueManager.notifyProgress(job, percent, 'RENDERING').catch(console.error);
       }
     });
 
     ffmpegProcess.on('close', (code) => {
+      job.process = undefined; // Clear process handle
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`FFmpeg processing failed with exit code ${code}.\nLogs snippet:\n${errorLog.slice(-1000)}`));
+        if (job.cancelled) {
+          reject(new Error('Job cancelled'));
+        } else {
+          reject(new Error(`FFmpeg processing failed with exit code ${code}.\nLogs snippet:\n${errorLog.slice(-1000)}`));
+        }
       }
     });
 
     ffmpegProcess.on('error', (err) => {
+      job.process = undefined;
       reject(err);
     });
   });
 }
 
-// HTTP POST /render route handler
-app.post('/render', async (req: Request, res: Response) => {
-  const taskId = req.body.taskId || `task-${Math.random().toString(36).substring(2, 11)}`;
-  console.log(`[TaskId: ${taskId}] Starting render job request.`);
-
-  // Temporary files workspace paths in /tmp (or local workspace if testing)
-  const isLocalWindows = process.platform === 'win32';
-  const tmpDir = isLocalWindows ? path.join(__dirname, 'tmp') : '/tmp';
-  
-  if (!fs.existsSync(tmpDir)) {
-    fs.mkdirSync(tmpDir, { recursive: true });
-  }
-
-  const localInputPath = path.join(tmpDir, `input-${taskId}.mp4`);
-  const localOutputPath = path.join(tmpDir, `output-${taskId}.mp4`);
-  const fontPath = path.join(tmpDir, `font-${taskId}.ttf`);
-  let localSoundtrackPath = '';
-
-  // 1. Validate Payload
-  const validationResult = renderRequestSchema.safeParse(req.body);
-  if (!validationResult.success) {
-    const errors = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
-    return res.status(400).json({ status: 'FAILED', error: `Validation Error: ${errors}` });
-  }
-
-  const payload: RenderRequest = validationResult.data;
-
-  // Set initial status and send accepted response immediately to prevent HTTP timeouts
-  await updateProgress(taskId, 2, 'DOWNLOADING');
-  res.status(202).json({
-    status: 'ACCEPTED',
-    taskId
-  });
-
-  // Execute processing asynchronously in the background
-  (async () => {
-    try {
-      // 2. Setup font asset
-      let localFontBundlePath = path.join(__dirname, 'assets', 'Roboto-Bold.ttf');
-      if (!fs.existsSync(localFontBundlePath)) {
-        // Fallback relative directory check
-        localFontBundlePath = path.join(__dirname, '..', 'assets', 'Roboto-Bold.ttf');
+// Emergency Disk Space Protection Check
+function checkFreeDiskSpace(): { freeBytes: number; error?: string } {
+  try {
+    if (process.platform === 'win32') {
+      const driveLetter = process.cwd()[0];
+      const output = execSync(`powershell -Command "(Get-PSDrive ${driveLetter}).Free"`, { encoding: 'utf8' }).trim();
+      const bytes = parseInt(output, 10);
+      if (!isNaN(bytes)) {
+        return { freeBytes: bytes };
       }
-      
-      if (fs.existsSync(localFontBundlePath)) {
-        fs.writeFileSync(fontPath, fs.readFileSync(localFontBundlePath));
-      } else {
-        console.warn(`Font file not found at ${localFontBundlePath}. Falling back to default system font configuration.`);
-      }
-
-      // 3. Download Source Video from GCS
-      console.log(`[TaskId: ${taskId}] Downloading source video from ${payload.sourceVideoGcsUrl}`);
-      await downloadFromGcs(payload.sourceVideoGcsUrl, localInputPath);
-      await updateProgress(taskId, 5, 'ANALYZING');
-
-      // Download or resolve soundtrack path
-      if (payload.soundtrackGcsUrl) {
-        if (payload.soundtrackGcsUrl.startsWith('gs://')) {
-          localSoundtrackPath = path.join(tmpDir, `soundtrack-${taskId}${path.extname(payload.soundtrackGcsUrl) || '.mp3'}`);
-          console.log(`[TaskId: ${taskId}] Downloading soundtrack from ${payload.soundtrackGcsUrl}`);
-          await downloadFromGcs(payload.soundtrackGcsUrl, localSoundtrackPath);
-        } else {
-          // Local path
-          localSoundtrackPath = payload.soundtrackGcsUrl;
-        }
-      } else {
-        // Map based on selected_mode
-        const mode = payload.blueprint.selected_mode || 'luxury-demon-reveal';
-        const fileName = DEFAULT_TRACKS[mode] || 'luxury_track.mp3';
-        
-        // Try to find the local file
-        const possiblePaths = [
-          path.join(__dirname, 'assets', 'audio', fileName),
-          path.join(__dirname, '..', 'assets', 'audio', fileName),
-          path.join(process.cwd(), 'public', 'audio', fileName),
-          path.join(process.cwd(), '..', '..', 'public', 'audio', fileName),
-        ];
-
-        for (const p of possiblePaths) {
-          if (fs.existsSync(p)) {
-            localSoundtrackPath = p;
-            break;
-          }
-        }
-
-        if (!localSoundtrackPath) {
-          // Absolute fallback to first possible path
-          localSoundtrackPath = possiblePaths[0];
-        }
-        console.log(`[TaskId: ${taskId}] Mapping default mode track for mode ${mode} -> ${localSoundtrackPath}`);
-      }
-
-      // 4. Pre-flight Video Resolution & Audio Checks
-      console.log(`[TaskId: ${taskId}] Running pre-flight video resolution verification.`);
-      const videoMetadata = parseVideoMetadata(localInputPath);
-      if (videoMetadata.width > 1920 || videoMetadata.height > 1920) {
-        throw new Error(`Video resolution (${videoMetadata.width}x${videoMetadata.height}) exceeds the supported 1080p limit (max 1920px on any side).`);
-      }
-      const hasAudio = checkAudioPresence(localInputPath);
-      console.log(`[TaskId: ${taskId}] Pre-flight verification successful. Native FPS: ${videoMetadata.fps.toFixed(2)} | Duration: ${videoMetadata.duration.toFixed(3)}s | Has audio: ${hasAudio}`);
-
-      // Extract transients for safety snapping
-      let transients: number[] = [];
-      try {
-        if (localSoundtrackPath && fs.existsSync(localSoundtrackPath)) {
-          console.log(`[TaskId: ${taskId}] Spawning transient analysis for safety snapping on: ${localSoundtrackPath}`);
-          const analysis = await extractAudioTransients(localSoundtrackPath);
-          transients = analysis.transients;
-          console.log(`[TaskId: ${taskId}] Safety snapping active. BPM: ${analysis.bpm} | Transients: ${transients.length} peaks`);
-        }
-      } catch (analysisError) {
-        console.warn(`[TaskId: ${taskId}] Audio transient safety snapping analysis failed:`, analysisError);
-      }
-
-      // 5. Durational Sync Clamping and Transient Beat-Snapping on Timeline Blocks
-      let currentStart = 0.0;
-      const initialTimeline = [];
-
-      for (let i = 0; i < payload.blueprint.timeline.length; i++) {
-        const block = payload.blueprint.timeline[i];
-        let start = currentStart;
-        let end = Math.min(block.end, videoMetadata.duration);
-
-        // Only snap intermediate boundaries; lock start=0.0 and final end=duration
-        if (i < payload.blueprint.timeline.length - 1) {
-          const snappedEnd = snapToNearestTransient(end, transients, 0.25);
-          if (snappedEnd > start) {
-            end = snappedEnd;
-          }
-        } else {
-          end = videoMetadata.duration;
-        }
-
-        if (start < end) {
-          initialTimeline.push({
-            ...block,
-            start,
-            end
-          });
-          currentStart = end;
-        }
-      }
-
-      // Fracture Engine Execution (Director-driven fracturing based on LLM blueprint flags)
-      let conformedTimeline: any[] = [];
-      let microClipIndex = 0;
-
-      for (const block of initialTimeline) {
-        const blockStart = block.start;
-        const blockEnd = block.end;
-        const blockDuration = blockEnd - blockStart;
-
-        // Find transients falling inside the block boundaries (excluding small edge tolerances)
-        const blockTransients = transients.filter(t => t > blockStart + 0.15 && t < blockEnd - 0.15);
-
-        if (block.fracture && blockTransients.length > 0) {
-          const cuts = [blockStart, ...blockTransients, blockEnd];
-          const N = cuts.length - 1;
-
-          for (let k = 0; k < N; k++) {
-            const subStart = cuts[k];
-            const subEnd = cuts[k + 1];
-            const subDuration = subEnd - subStart;
-
-            // Dynamically vary velocity ramping speeds per sub-segment based on LLM planned speedRamp
-            let subSpeed = block.speed;
-            const speedRampLower = (block.speedRamp || '').toLowerCase();
-            if (speedRampLower.includes('fast -> slow') || speedRampLower.includes('fast-in / slow-out') || speedRampLower.includes('down')) {
-              // Ramp speed down from 3.0 to 0.5 (or 0.25)
-              subSpeed = N > 1 ? 3.0 - (k / (N - 1)) * 2.5 : block.speed;
-            } else if (speedRampLower.includes('slow -> fast') || speedRampLower.includes('up')) {
-              // Ramp speed up from 0.5 to 3.0
-              subSpeed = N > 1 ? 0.5 + (k / (N - 1)) * 2.5 : block.speed;
-            } else if (speedRampLower.includes('hyper') || speedRampLower.includes('climax') || speedRampLower.includes('drop')) {
-              // Alternate hyper-fast cuts and slow-mo drops
-              subSpeed = k % 2 === 0 ? 4.0 : 0.25;
-            }
-
-            const sourceSliceDuration = subDuration * subSpeed;
-            const maxPossibleStart = Math.max(0, videoMetadata.duration - sourceSliceDuration);
-            let sourceStart = subStart;
-            let sourceEnd = subEnd;
-
-            if (maxPossibleStart > 0) {
-              // Build deterministic seed using block.text (which is cleaned title) + microClipIndex
-              const seedStr = `${block.text || 'cf-clip'}-${microClipIndex}`;
-              const hashVal = hashString(seedStr);
-              sourceStart = (hashVal * maxPossibleStart) % maxPossibleStart;
-              sourceStart = Math.max(0, Math.min(sourceStart, maxPossibleStart));
-              sourceEnd = sourceStart + sourceSliceDuration;
-            } else {
-              // Clamp/fallback to linear trim
-              sourceStart = subStart % videoMetadata.duration;
-              sourceEnd = Math.min(sourceStart + sourceSliceDuration, videoMetadata.duration);
-            }
-
-            conformedTimeline.push({
-              ...block,
-              start: subStart,
-              end: subEnd,
-              speed: subSpeed,
-              sourceStart,
-              sourceEnd
-            });
-            microClipIndex++;
-          }
-        } else {
-          // Linear playback fallback for structural segments
-          conformedTimeline.push({
-            ...block,
-            sourceStart: block.start,
-            sourceEnd: block.end
-          });
-        }
-      }
-
-      // If all blocks are out of bounds or empty, create a fallback block covering the full duration
-      if (conformedTimeline.length === 0 && videoMetadata.duration > 0) {
-        conformedTimeline = [
-          {
-            start: 0,
-            end: videoMetadata.duration,
-            speed: 1.0,
-            text: 'CineForge Clip',
-            sourceStart: 0,
-            sourceEnd: videoMetadata.duration
-          }
-        ];
-      }
-
-      // Calculate conformed output duration
-      const totalDuration = conformedTimeline.reduce(
-        (acc, block) => acc + (block.end - block.start) / block.speed,
-        0
-      );
-
-      const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = buildFilterComplex(
-        conformedTimeline,
-        payload.blueprint.color_grade,
-        fontPath,
-        hasAudio,
-        payload.blueprint.selected_mode,
-        payload.blueprint.viewer_emotion,
-        payload.blueprint.hook_intensity
-      );
-
-      // Compile FFmpeg command line arguments
-      const ffmpegArgs = [
-        '-y',
-        '-i', localInputPath,
-        '-i', localSoundtrackPath,
-        '-filter_complex', filterComplex,
-        '-map', `[${videoMap}]`
-      ];
-
-      if (outputHasAudio) {
-        ffmpegArgs.push('-map', `[${audioMap}]`);
-      }
-
-      // Export codecs & config options
-      const requestedFps = payload.blueprint.export?.fps || 60;
-      // Clamp output FPS to the input video's native FPS if the input is lower (saves CPU)
-      const fps = Math.min(requestedFps, Math.ceil(videoMetadata.fps));
-
-      let codec = payload.blueprint.export?.codec === 'hevc' ? 'libx265' : 'libx264';
-      if (process.env.RENDER_MODE === 'local') {
-        codec = isQsvSupported ? 'h264_qsv' : 'libx264';
-      }
-
-      ffmpegArgs.push(
-        '-c:v', codec,
-        '-preset', 'veryfast',
-        '-r', fps.toString(),
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart'
-      );
-
-      if (outputHasAudio) {
-        ffmpegArgs.push('-c:a', 'aac', '-b:a', '192k');
-      }
-
-      // Enforce absolute duration truncation before final output path
-      ffmpegArgs.push('-t', totalDuration.toFixed(3), localOutputPath);
-
-      // 6. Execute FFmpeg Rendering
-      console.log(`[TaskId: ${taskId}] Starting render rendering cycle.`);
-      await updateProgress(taskId, 10, 'RENDERING');
-      await runFfmpegWithProgress(ffmpegArgs, totalDuration, taskId);
-
-      // 7. Upload final output to GCS
-      console.log(`[TaskId: ${taskId}] Uploading rendered output video to ${payload.outputGcsUrl}`);
-      await updateProgress(taskId, 95, 'UPLOADING');
-      await uploadToGcs(localOutputPath, payload.outputGcsUrl);
-
-      // 8. Generate GCS Signed URL
-      const presignedUrl = await generateGcsSignedUrl(payload.outputGcsUrl);
-      console.log(`[TaskId: ${taskId}] Render complete. Presigned URL compiled.`);
-      await updateProgress(taskId, 100, 'COMPLETED');
-
-    } catch (error) {
-      console.error(`[TaskId: ${taskId}] Render job crashed:`, error);
-      await updateProgress(taskId, 100, 'FAILED', (error as Error).message);
-
-    } finally {
-      // 9. Hardened Workspace Cleanup
-      console.log(`[TaskId: ${taskId}] Cleaning up temporary workspace files.`);
-      const filesToUnlink = [localInputPath, localOutputPath, fontPath];
-      if (localSoundtrackPath && localSoundtrackPath.startsWith(tmpDir)) {
-        filesToUnlink.push(localSoundtrackPath);
-      }
-      for (const filePath of filesToUnlink) {
-        try {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-            console.log(`[TaskId: ${taskId}] Successfully cleaned up ${filePath}`);
-          }
-        } catch (cleanupError) {
-          console.warn(`[TaskId: ${taskId}] Failed to clean up ${filePath}:`, cleanupError);
+    } else {
+      const output = execSync(`df -B1 .`, { encoding: 'utf8' });
+      const lines = output.trim().split('\n');
+      if (lines.length > 1) {
+        const parts = lines[1].trim().split(/\s+/);
+        if (parts.length >= 4) {
+          return { freeBytes: parseInt(parts[3], 10) };
         }
       }
     }
-  })();
-});
+  } catch (e) {
+    return { freeBytes: Infinity, error: (e as Error).message };
+  }
+  return { freeBytes: Infinity };
+}
 
-// HTTP POST /render/preview route handler for ultra-low-latency timeline seeks
-app.post('/render/preview', async (req: Request, res: Response) => {
-  const taskId = req.body.taskId || `preview-${Math.random().toString(36).substring(2, 11)}`;
-  console.log(`[TaskId: ${taskId}] Starting preview render request.`);
-
+// Background Asset Cleanup Logic
+function cleanupExpiredAssets() {
+  console.log('[Cleanup] Starting automated background asset cleanup.');
   const isLocalWindows = process.platform === 'win32';
   const tmpDir = isLocalWindows ? path.join(__dirname, 'tmp') : '/tmp';
-  
+  const activePaths = renderQueueManager.getActiveFilePaths();
+
+  const now = Date.now();
+  const TMP_EXPIRATION_MS = 30 * 60 * 1000; // 30 minutes
+  const PREVIEW_EXPIRATION_MS = 60 * 60 * 1000; // 1 hour
+
+  // 1. Clean tmp folder
+  if (fs.existsSync(tmpDir)) {
+    try {
+      fs.readdirSync(tmpDir).forEach(file => {
+        const filePath = path.join(tmpDir, file);
+        const resolvedPath = path.resolve(filePath);
+        if (activePaths.has(resolvedPath)) {
+          console.log(`[Cleanup] Skipping active temporary file: ${file}`);
+          return;
+        }
+        try {
+          const stat = fs.statSync(filePath);
+          if (stat.isFile() && (now - stat.mtimeMs > TMP_EXPIRATION_MS)) {
+            fs.unlinkSync(filePath);
+            console.log(`[Cleanup] Deleted expired temporary file: ${file}`);
+          }
+        } catch (err) {
+          console.warn(`[Cleanup] Failed to process/delete tmp file ${file}:`, err);
+        }
+      });
+    } catch (err) {
+      console.error('[Cleanup] Failed to read tmp directory:', err);
+    }
+  }
+
+  // 2. Clean local previews in public/renders (only in local mode)
+  if (process.env.RENDER_MODE === 'local') {
+    const rendersDir = path.join(process.cwd(), 'public', 'renders');
+    const targetRenders = (!fs.existsSync(rendersDir) && fs.existsSync(path.join(process.cwd(), '..', '..', 'public', 'renders')))
+      ? path.join(process.cwd(), '..', '..', 'public', 'renders')
+      : rendersDir;
+
+    if (fs.existsSync(targetRenders)) {
+      try {
+        fs.readdirSync(targetRenders).forEach(file => {
+          if (!file.startsWith('preview-') || !file.endsWith('.mp4')) {
+            return;
+          }
+          const filePath = path.join(targetRenders, file);
+          const resolvedPath = path.resolve(filePath);
+          if (activePaths.has(resolvedPath)) {
+            console.log(`[Cleanup] Skipping active preview file: ${file}`);
+            return;
+          }
+          try {
+            const stat = fs.statSync(filePath);
+            if (stat.isFile() && (now - stat.mtimeMs > PREVIEW_EXPIRATION_MS)) {
+              fs.unlinkSync(filePath);
+              console.log(`[Cleanup] Deleted expired preview file: ${file}`);
+            }
+          } catch (err) {
+            console.warn(`[Cleanup] Failed to process/delete preview file ${file}:`, err);
+          }
+        });
+      } catch (err) {
+        console.error('[Cleanup] Failed to read public renders directory:', err);
+      }
+    }
+  }
+}
+
+// Start automated background asset cleanup loop (every 15 minutes)
+setInterval(cleanupExpiredAssets, 15 * 60 * 1000);
+
+// Initialize Queue Manager runners
+renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
+  const isLocalWindows = process.platform === 'win32';
+  const tmpDir = isLocalWindows ? path.join(__dirname, 'tmp') : '/tmp';
+
   if (!fs.existsSync(tmpDir)) {
     fs.mkdirSync(tmpDir, { recursive: true });
   }
 
-  const localInputPath = path.join(tmpDir, `input-preview-${taskId}.mp4`);
-  const localOutputPath = path.join(tmpDir, `preview-${taskId}.mp4`);
-  const fontPath = path.join(tmpDir, `font-preview-${taskId}.ttf`);
+  const localInputPath = path.join(tmpDir, `input-${job.jobId}.mp4`);
+  const localOutputPath = path.join(tmpDir, `output-${job.jobId}.mp4`);
+  const fontPath = path.join(tmpDir, `font-${job.jobId}.ttf`);
   let localSoundtrackPath = '';
+
+  // Register active file safety locks
+  job.activeFiles = [localInputPath, localOutputPath, fontPath];
 
   try {
-    // 1. Validate Request Payload
-    const validationResult = renderRequestSchema.safeParse(req.body);
-    if (!validationResult.success) {
-      const errors = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
-      return res.status(400).json({ status: 'FAILED', error: `Validation Error: ${errors}` });
+    // 1. Emergency Disk Protection
+    const diskInfo = checkFreeDiskSpace();
+    const MIN_DISK_SPACE_BYTES = Number(process.env.MIN_DISK_SPACE_BYTES ?? 500 * 1024 * 1024); // Default 500MB
+    if (diskInfo.freeBytes < MIN_DISK_SPACE_BYTES) {
+      throw new Error(`Worker storage limit reached. Free space: ${(diskInfo.freeBytes / 1024 / 1024).toFixed(1)}MB, required: ${(MIN_DISK_SPACE_BYTES / 1024 / 1024).toFixed(1)}MB.`);
     }
 
-    const payload = validationResult.data;
-    const previewStart = payload.previewStart ?? 0.0;
-    const previewDuration = payload.previewDuration ?? 2.0;
-
-    // 2. Setup font asset
+    const payload = renderRequestSchema.parse(job.reqBody);
+    
+    // Setup Font
     let localFontBundlePath = path.join(__dirname, 'assets', 'Roboto-Bold.ttf');
     if (!fs.existsSync(localFontBundlePath)) {
       localFontBundlePath = path.join(__dirname, '..', 'assets', 'Roboto-Bold.ttf');
     }
-    
     if (fs.existsSync(localFontBundlePath)) {
       fs.writeFileSync(fontPath, fs.readFileSync(localFontBundlePath));
     }
 
-    // 3. Download Source Video from GCS
+    // Stage 1: Download
+    const downloadStart = Date.now();
+    await renderQueueManager.notifyProgress(job, 3, 'DOWNLOADING');
     await downloadFromGcs(payload.sourceVideoGcsUrl, localInputPath);
-
-    // Download or resolve soundtrack path
+    
     if (payload.soundtrackGcsUrl) {
       if (payload.soundtrackGcsUrl.startsWith('gs://')) {
-        localSoundtrackPath = path.join(tmpDir, `soundtrack-preview-${taskId}${path.extname(payload.soundtrackGcsUrl) || '.mp3'}`);
+        localSoundtrackPath = path.join(tmpDir, `soundtrack-${job.jobId}${path.extname(payload.soundtrackGcsUrl) || '.mp3'}`);
+        job.activeFiles.push(localSoundtrackPath);
         await downloadFromGcs(payload.soundtrackGcsUrl, localSoundtrackPath);
       } else {
         localSoundtrackPath = payload.soundtrackGcsUrl;
+        job.activeFiles.push(localSoundtrackPath);
       }
     } else {
       const mode = payload.blueprint.selected_mode || 'luxury-demon-reveal';
@@ -722,36 +507,32 @@ app.post('/render/preview', async (req: Request, res: Response) => {
       if (!localSoundtrackPath) {
         localSoundtrackPath = possiblePaths[0];
       }
+      job.activeFiles.push(localSoundtrackPath);
     }
+    const downloadDuration = (Date.now() - downloadStart) / 1000;
 
-    // 4. Pre-flight Video Resolution & Audio Checks
+    // Stage 2: Analysis
+    const analysisStart = Date.now();
+    await renderQueueManager.notifyProgress(job, 5, 'ANALYZING');
     const videoMetadata = parseVideoMetadata(localInputPath);
     if (videoMetadata.width > 1920 || videoMetadata.height > 1920) {
       throw new Error(`Video resolution (${videoMetadata.width}x${videoMetadata.height}) exceeds the supported 1080p limit.`);
     }
     const hasAudio = checkAudioPresence(localInputPath);
 
-    // Extract transients for preview safety snapping
     let transients: number[] = [];
-    try {
-      if (localSoundtrackPath && fs.existsSync(localSoundtrackPath)) {
-        const analysis = await extractAudioTransients(localSoundtrackPath);
-        transients = analysis.transients;
-      }
-    } catch (e) {
-      console.warn(`[Preview Task] Transient analysis failed:`, e);
+    if (localSoundtrackPath && fs.existsSync(localSoundtrackPath)) {
+      const analysis = await extractAudioTransients(localSoundtrackPath);
+      transients = analysis.transients;
     }
 
-    // Clamp timeline blocks in preview and snap boundaries to transient markers
     let currentStart = 0.0;
     const initialTimeline = [];
-
     for (let i = 0; i < payload.blueprint.timeline.length; i++) {
       const block = payload.blueprint.timeline[i];
       let start = currentStart;
       let end = Math.min(block.end, videoMetadata.duration);
 
-      // Only snap intermediate boundaries; lock start=0.0 and final end=duration
       if (i < payload.blueprint.timeline.length - 1) {
         const snappedEnd = snapToNearestTransient(end, transients, 0.25);
         if (snappedEnd > start) {
@@ -762,37 +543,314 @@ app.post('/render/preview', async (req: Request, res: Response) => {
       }
 
       if (start < end) {
-        initialTimeline.push({
-          ...block,
-          start,
-          end
-        });
+        initialTimeline.push({ ...block, start, end });
         currentStart = end;
       }
     }
 
-    // Fracture Engine Execution (Director-driven fracturing based on LLM blueprint flags)
     let conformedTimeline: any[] = [];
     let microClipIndex = 0;
-
     for (const block of initialTimeline) {
       const blockStart = block.start;
       const blockEnd = block.end;
-      const blockDuration = blockEnd - blockStart;
-
-      // Find transients falling inside the block boundaries (excluding small edge tolerances)
       const blockTransients = transients.filter(t => t > blockStart + 0.15 && t < blockEnd - 0.15);
 
       if (block.fracture && blockTransients.length > 0) {
         const cuts = [blockStart, ...blockTransients, blockEnd];
         const N = cuts.length - 1;
-
         for (let k = 0; k < N; k++) {
           const subStart = cuts[k];
           const subEnd = cuts[k + 1];
           const subDuration = subEnd - subStart;
 
-          // Dynamically vary velocity ramping speeds per sub-segment based on LLM planned speedRamp
+          let subSpeed = block.speed;
+          const speedRampLower = (block.speedRamp || '').toLowerCase();
+          if (speedRampLower.includes('fast -> slow') || speedRampLower.includes('fast-in / slow-out') || speedRampLower.includes('down')) {
+            subSpeed = N > 1 ? 3.0 - (k / (N - 1)) * 2.5 : block.speed;
+          } else if (speedRampLower.includes('slow -> fast') || speedRampLower.includes('up')) {
+            subSpeed = N > 1 ? 0.5 + (k / (N - 1)) * 2.5 : block.speed;
+          } else if (speedRampLower.includes('hyper') || speedRampLower.includes('climax') || speedRampLower.includes('drop')) {
+            subSpeed = k % 2 === 0 ? 4.0 : 0.25;
+          }
+
+          const sourceSliceDuration = subDuration * subSpeed;
+          const maxPossibleStart = Math.max(0, videoMetadata.duration - sourceSliceDuration);
+          let sourceStart = subStart;
+          let sourceEnd = subEnd;
+
+          if (maxPossibleStart > 0) {
+            const seedStr = `${block.text || 'cf-clip'}-${microClipIndex}`;
+            const hashVal = hashString(seedStr);
+            sourceStart = (hashVal * maxPossibleStart) % maxPossibleStart;
+            sourceStart = Math.max(0, Math.min(sourceStart, maxPossibleStart));
+            sourceEnd = sourceStart + sourceSliceDuration;
+          } else {
+            sourceStart = subStart % videoMetadata.duration;
+            sourceEnd = Math.min(sourceStart + sourceSliceDuration, videoMetadata.duration);
+          }
+
+          conformedTimeline.push({
+            ...block,
+            start: subStart,
+            end: subEnd,
+            speed: subSpeed,
+            sourceStart,
+            sourceEnd
+          });
+          microClipIndex++;
+        }
+      } else {
+        conformedTimeline.push({
+          ...block,
+          sourceStart: block.start,
+          sourceEnd: block.end
+        });
+      }
+    }
+
+    if (conformedTimeline.length === 0 && videoMetadata.duration > 0) {
+      conformedTimeline = [{
+        start: 0,
+        end: videoMetadata.duration,
+        speed: 1.0,
+        text: 'CineForge Clip',
+        sourceStart: 0,
+        sourceEnd: videoMetadata.duration
+      }];
+    }
+
+    const totalDuration = conformedTimeline.reduce((acc, b) => acc + (b.end - b.start) / b.speed, 0);
+
+    const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = buildFilterComplex(
+      conformedTimeline,
+      payload.blueprint.color_grade,
+      fontPath,
+      hasAudio,
+      payload.blueprint.selected_mode,
+      payload.blueprint.viewer_emotion,
+      payload.blueprint.hook_intensity
+    );
+
+    const ffmpegArgs = [
+      '-y',
+      '-i', localInputPath,
+      '-i', localSoundtrackPath,
+      '-filter_complex', filterComplex,
+      '-map', `[${videoMap}]`
+    ];
+
+    if (outputHasAudio) {
+      ffmpegArgs.push('-map', `[${audioMap}]`);
+    }
+
+    const requestedFps = payload.blueprint.export?.fps || 60;
+    const fps = Math.min(requestedFps, Math.ceil(videoMetadata.fps));
+    let codec = payload.blueprint.export?.codec === 'hevc' ? 'libx265' : 'libx264';
+
+    ffmpegArgs.push(
+      '-c:v', codec,
+      '-preset', 'veryfast',
+      '-r', fps.toString(),
+      '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart'
+    );
+
+    if (outputHasAudio) {
+      ffmpegArgs.push('-c:a', 'aac', '-b:a', '192k');
+    }
+    ffmpegArgs.push('-t', totalDuration.toFixed(3), localOutputPath);
+    const analysisDuration = (Date.now() - analysisStart) / 1000;
+
+    // Stage 3: Render
+    const renderStart = Date.now();
+    await renderQueueManager.notifyProgress(job, 10, 'RENDERING');
+    await runFfmpegWithProgress(ffmpegArgs, totalDuration, job);
+    const renderDuration = (Date.now() - renderStart) / 1000;
+
+    // Stage 4: Upload
+    const uploadStart = Date.now();
+    await renderQueueManager.notifyProgress(job, 95, 'UPLOADING');
+    
+    let outputSize = 0;
+    try {
+      outputSize = fs.statSync(localOutputPath).size;
+    } catch {}
+
+    await uploadToGcs(localOutputPath, payload.outputGcsUrl);
+    const presignedUrl = await generateGcsSignedUrl(payload.outputGcsUrl);
+    const uploadDuration = (Date.now() - uploadStart) / 1000;
+
+    // Compile Telemetry Diagnostics
+    const totalJobDuration = (Date.now() - (job.startedAt ?? job.addedAt)) / 1000;
+    job.diagnostics = {
+      renderProfile: payload.blueprint.selected_mode,
+      downloadDuration,
+      analysisDuration,
+      renderDuration,
+      uploadDuration,
+      totalDuration: totalJobDuration,
+      outputSize,
+      workerNode: `${require('os').hostname()}:${process.pid}`
+    };
+
+    console.log(`[Queue] Render Job ${job.jobId} completed successfully in ${totalJobDuration.toFixed(1)}s.`);
+    await renderQueueManager.notifyProgress(job, 100, 'COMPLETED');
+    
+    if (job.resolve) job.resolve({ jobId: job.jobId, taskId: job.taskId, outputUrl: presignedUrl });
+
+  } catch (error) {
+    if (job.cancelled) {
+      console.log(`[Queue] Render Job ${job.jobId} was cancelled mid-process.`);
+      return;
+    }
+
+    const errorMsg = (error as Error).message;
+    console.error(`[Queue] Render Job ${job.jobId} failed:`, errorMsg);
+    
+    const endedAt = Date.now();
+    job.diagnostics = {
+      ...job.diagnostics,
+      totalDuration: (endedAt - (job.startedAt ?? job.addedAt)) / 1000,
+      error: errorMsg
+    };
+
+    await renderQueueManager.notifyProgress(job, 100, 'FAILED', errorMsg);
+    if (job.reject) job.reject(error);
+  } finally {
+    // Clear locked file safety paths
+    job.activeFiles.forEach(filePath => {
+      try {
+        if (fs.existsSync(filePath) && !filePath.startsWith(path.join(__dirname, 'assets')) && !filePath.startsWith(path.join(process.cwd(), 'public', 'audio'))) {
+          fs.unlinkSync(filePath);
+        }
+      } catch {}
+    });
+    job.activeFiles = [];
+  }
+};
+
+renderQueueManager.executePreviewRunner = async (job: RenderJob) => {
+  const isLocalWindows = process.platform === 'win32';
+  const tmpDir = isLocalWindows ? path.join(__dirname, 'tmp') : '/tmp';
+
+  if (!fs.existsSync(tmpDir)) {
+    fs.mkdirSync(tmpDir, { recursive: true });
+  }
+
+  const localInputPath = path.join(tmpDir, `input-preview-${job.jobId}.mp4`);
+  const localOutputPath = path.join(tmpDir, `preview-${job.jobId}.mp4`);
+  const fontPath = path.join(tmpDir, `font-preview-${job.jobId}.ttf`);
+  let localSoundtrackPath = '';
+
+  job.activeFiles = [localInputPath, localOutputPath, fontPath];
+
+  try {
+    // 1. Emergency Disk Protection
+    const diskInfo = checkFreeDiskSpace();
+    const MIN_DISK_SPACE_BYTES = Number(process.env.MIN_DISK_SPACE_BYTES ?? 500 * 1024 * 1024);
+    if (diskInfo.freeBytes < MIN_DISK_SPACE_BYTES) {
+      throw new Error(`Worker storage limit reached.`);
+    }
+
+    const payload = renderRequestSchema.parse(job.reqBody);
+    const previewStart = payload.previewStart ?? 0.0;
+    const previewDuration = payload.previewDuration ?? 2.0;
+
+    // Setup Font
+    let localFontBundlePath = path.join(__dirname, 'assets', 'Roboto-Bold.ttf');
+    if (!fs.existsSync(localFontBundlePath)) {
+      localFontBundlePath = path.join(__dirname, '..', 'assets', 'Roboto-Bold.ttf');
+    }
+    if (fs.existsSync(localFontBundlePath)) {
+      fs.writeFileSync(fontPath, fs.readFileSync(localFontBundlePath));
+    }
+
+    // Stage 1: Download
+    const downloadStart = Date.now();
+    await downloadFromGcs(payload.sourceVideoGcsUrl, localInputPath);
+    
+    if (payload.soundtrackGcsUrl) {
+      if (payload.soundtrackGcsUrl.startsWith('gs://')) {
+        localSoundtrackPath = path.join(tmpDir, `soundtrack-preview-${job.jobId}${path.extname(payload.soundtrackGcsUrl) || '.mp3'}`);
+        job.activeFiles.push(localSoundtrackPath);
+        await downloadFromGcs(payload.soundtrackGcsUrl, localSoundtrackPath);
+      } else {
+        localSoundtrackPath = payload.soundtrackGcsUrl;
+        job.activeFiles.push(localSoundtrackPath);
+      }
+    } else {
+      const mode = payload.blueprint.selected_mode || 'luxury-demon-reveal';
+      const fileName = DEFAULT_TRACKS[mode] || 'luxury_track.mp3';
+      const possiblePaths = [
+        path.join(__dirname, 'assets', 'audio', fileName),
+        path.join(__dirname, '..', 'assets', 'audio', fileName),
+        path.join(process.cwd(), 'public', 'audio', fileName),
+        path.join(process.cwd(), '..', '..', 'public', 'audio', fileName),
+      ];
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          localSoundtrackPath = p;
+          break;
+        }
+      }
+      if (!localSoundtrackPath) {
+        localSoundtrackPath = possiblePaths[0];
+      }
+      job.activeFiles.push(localSoundtrackPath);
+    }
+    const downloadDuration = (Date.now() - downloadStart) / 1000;
+
+    // Stage 2: Analysis
+    const analysisStart = Date.now();
+    const videoMetadata = parseVideoMetadata(localInputPath);
+    if (videoMetadata.width > 1920 || videoMetadata.height > 1920) {
+      throw new Error(`Video resolution (${videoMetadata.width}x${videoMetadata.height}) exceeds the supported 1080p limit.`);
+    }
+    const hasAudio = checkAudioPresence(localInputPath);
+
+    let transients: number[] = [];
+    if (localSoundtrackPath && fs.existsSync(localSoundtrackPath)) {
+      const analysis = await extractAudioTransients(localSoundtrackPath);
+      transients = analysis.transients;
+    }
+
+    let currentStart = 0.0;
+    const initialTimeline = [];
+    for (let i = 0; i < payload.blueprint.timeline.length; i++) {
+      const block = payload.blueprint.timeline[i];
+      let start = currentStart;
+      let end = Math.min(block.end, videoMetadata.duration);
+
+      if (i < payload.blueprint.timeline.length - 1) {
+        const snappedEnd = snapToNearestTransient(end, transients, 0.25);
+        if (snappedEnd > start) {
+          end = snappedEnd;
+        }
+      } else {
+        end = videoMetadata.duration;
+      }
+
+      if (start < end) {
+        initialTimeline.push({ ...block, start, end });
+        currentStart = end;
+      }
+    }
+
+    let conformedTimeline: any[] = [];
+    let microClipIndex = 0;
+    for (const block of initialTimeline) {
+      const blockStart = block.start;
+      const blockEnd = block.end;
+      const blockTransients = transients.filter(t => t > blockStart + 0.15 && t < blockEnd - 0.15);
+
+      if (block.fracture && blockTransients.length > 0) {
+        const cuts = [blockStart, ...blockTransients, blockEnd];
+        const N = cuts.length - 1;
+        for (let k = 0; k < N; k++) {
+          const subStart = cuts[k];
+          const subEnd = cuts[k + 1];
+          const subDuration = subEnd - subStart;
+
           let subSpeed = block.speed;
           const speedRampLower = (block.speedRamp || '').toLowerCase();
           if (speedRampLower.includes('fast -> slow') || speedRampLower.includes('fast-in / slow-out') || speedRampLower.includes('down')) {
@@ -839,19 +897,16 @@ app.post('/render/preview', async (req: Request, res: Response) => {
     }
 
     if (conformedTimeline.length === 0 && videoMetadata.duration > 0) {
-      conformedTimeline = [
-        {
-          start: 0,
-          end: videoMetadata.duration,
-          speed: 1.0,
-          text: 'CineForge Preview',
-          sourceStart: 0,
-          sourceEnd: videoMetadata.duration
-        }
-      ];
+      conformedTimeline = [{
+        start: 0,
+        end: videoMetadata.duration,
+        speed: 1.0,
+        text: 'CineForge Preview',
+        sourceStart: 0,
+        sourceEnd: videoMetadata.duration
+      }];
     }
 
-    // 5. Compile FFmpeg Filter Complex with preview offsets
     const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = buildFilterComplex(
       conformedTimeline,
       payload.blueprint.color_grade,
@@ -864,7 +919,6 @@ app.post('/render/preview', async (req: Request, res: Response) => {
       previewDuration
     );
 
-    // Compile FFmpeg command line arguments (with fast seeking before inputs)
     const ffmpegArgs = [
       '-y',
       '-ss', previewStart.toString(),
@@ -881,76 +935,181 @@ app.post('/render/preview', async (req: Request, res: Response) => {
       ffmpegArgs.push('-map', `[${audioMap}]`);
     }
 
-    // Force h264_qsv/libx264 veryfast/ultrafast preset to maximize completion velocity
-    const previewCodec = isQsvSupported ? 'h264_qsv' : 'libx264';
+    const previewCodec = 'libx264';
     ffmpegArgs.push('-c:v', previewCodec);
-    if (isQsvSupported) {
-      ffmpegArgs.push('-preset', 'veryfast');
-    } else {
-      ffmpegArgs.push('-preset', 'ultrafast');
-    }
+    ffmpegArgs.push('-preset', 'ultrafast');
 
-    // Clamp preview output FPS to native FPS (capped at 30)
     const fps = Math.min(30, Math.ceil(videoMetadata.fps));
-
-    ffmpegArgs.push(
-      '-r', fps.toString(),
-      '-pix_fmt', 'yuv420p',
-      '-movflags', '+faststart'
-    );
-
+    ffmpegArgs.push('-r', fps.toString(), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
     if (outputHasAudio) {
       ffmpegArgs.push('-c:a', 'aac', '-b:a', '128k');
     }
-
-    // Terminate exactly at preview duration and output to temp output path
     ffmpegArgs.push('-t', previewDuration.toString(), localOutputPath);
+    const analysisDuration = (Date.now() - analysisStart) / 1000;
 
-    // 6. Execute FFmpeg Rendering synchronously to enable immediate HTTP response return
+    // Stage 3: Render
+    const renderStart = Date.now();
     const ffmpegCmd = getFfmpegCommand();
-    const runResult = spawnSync(ffmpegCmd, ffmpegArgs);
-    if (runResult.status !== 0) {
-      throw new Error(`FFmpeg preview generation failed with exit code ${runResult.status}. Stderr: ${runResult.stderr?.toString()}`);
-    }
+    const runResult = await new Promise<number>((resClose, rejClose) => {
+      const process = spawn(ffmpegCmd, ffmpegArgs);
+      job.process = process;
 
-    // 7. Save output to distinct file track: preview-[projectId].mp4
-    const previewGcsUrl = payload.outputGcsUrl.replace(/output-[^/]+\.mp4$/, `preview-${taskId}.mp4`);
-    console.log(`[TaskId: ${taskId}] Uploading preview rendered output video to ${previewGcsUrl}`);
-    await uploadToGcs(localOutputPath, previewGcsUrl);
-
-    // 8. Generate Signed URL
-    const presignedUrl = await generateGcsSignedUrl(previewGcsUrl);
-    console.log(`[TaskId: ${taskId}] Preview complete. URL: ${presignedUrl}`);
-
-    return res.status(200).json({
-      status: 'COMPLETED',
-      taskId,
-      outputUrl: presignedUrl
+      process.on('close', (code) => {
+        job.process = undefined;
+        resClose(code ?? 0);
+      });
+      process.on('error', (err) => {
+        job.process = undefined;
+        rejClose(err);
+      });
     });
 
+    if (runResult !== 0) {
+      if (job.cancelled) {
+        throw new Error('Preview job cancelled');
+      }
+      throw new Error(`FFmpeg preview generation failed with exit code ${runResult}.`);
+    }
+    const renderDuration = (Date.now() - renderStart) / 1000;
+
+    // Stage 4: Upload
+    const uploadStart = Date.now();
+    const previewGcsUrl = payload.outputGcsUrl.replace(/output-[^/]+\.mp4$/, `preview-${job.jobId}.mp4`);
+    
+    let outputSize = 0;
+    try {
+      outputSize = fs.statSync(localOutputPath).size;
+    } catch {}
+
+    await uploadToGcs(localOutputPath, previewGcsUrl);
+    const presignedUrl = await generateGcsSignedUrl(previewGcsUrl);
+    const uploadDuration = (Date.now() - uploadStart) / 1000;
+
+    const totalJobDuration = (Date.now() - (job.startedAt ?? job.addedAt)) / 1000;
+    job.diagnostics = {
+      renderProfile: payload.blueprint.selected_mode,
+      downloadDuration,
+      analysisDuration,
+      renderDuration,
+      uploadDuration,
+      totalDuration: totalJobDuration,
+      outputSize,
+      workerNode: `${require('os').hostname()}:${process.pid}`
+    };
+
+    console.log(`[Queue] Preview Job ${job.jobId} completed successfully.`);
+    if (job.resolve) {
+      job.resolve({
+        status: 'COMPLETED',
+        taskId: job.taskId,
+        jobId: job.jobId,
+        outputUrl: presignedUrl,
+        diagnostics: job.diagnostics
+      });
+    }
+
   } catch (error) {
-    console.error(`[TaskId: ${taskId}] Preview render crashed:`, error);
+    if (job.cancelled) {
+      console.log(`[Queue] Preview Job ${job.jobId} was cancelled mid-process.`);
+      return;
+    }
+    const errorMsg = (error as Error).message;
+    console.error(`[Queue] Preview Job ${job.jobId} failed:`, errorMsg);
+    if (job.reject) job.reject(error);
+  } finally {
+    // Clear locked file safety paths
+    job.activeFiles.forEach(filePath => {
+      try {
+        if (fs.existsSync(filePath) && !filePath.startsWith(path.join(__dirname, 'assets')) && !filePath.startsWith(path.join(process.cwd(), 'public', 'audio'))) {
+          fs.unlinkSync(filePath);
+        }
+      } catch {}
+    });
+    job.activeFiles = [];
+  }
+};
+
+// HTTP POST /render route handler - Queue Enqueueing Flow
+app.post('/render', async (req: Request, res: Response) => {
+  const taskId = req.body.taskId || `task-${Math.random().toString(36).substring(2, 11)}`;
+  console.log(`[TaskId: ${taskId}] Ingestion request for master render.`);
+
+  // 1. Validate Request Payload
+  const validationResult = renderRequestSchema.safeParse(req.body);
+  if (!validationResult.success) {
+    const errors = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+    return res.status(400).json({ status: 'FAILED', error: `Validation Error: ${errors}` });
+  }
+
+  // Enqueue job with Queue Manager
+  const job = renderQueueManager.enqueue(taskId, 'render', req.body);
+
+  return res.status(202).json({
+    status: 'ACCEPTED',
+    taskId,
+    jobId: job.jobId
+  });
+});
+
+// HTTP POST /render/preview route handler - Awaiting Queue Execution Flow
+app.post('/render/preview', async (req: Request, res: Response) => {
+  const taskId = req.body.taskId || `preview-${Math.random().toString(36).substring(2, 11)}`;
+  console.log(`[TaskId: ${taskId}] Ingestion request for timeline seek preview.`);
+
+  // 1. Validate Request Payload
+  const validationResult = renderRequestSchema.safeParse(req.body);
+  if (!validationResult.success) {
+    const errors = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+    return res.status(400).json({ status: 'FAILED', error: `Validation Error: ${errors}` });
+  }
+
+  // Enqueue preview and await the execution resolution
+  const jobPromise = new Promise((resolve, reject) => {
+    renderQueueManager.enqueue(taskId, 'preview', req.body, resolve, reject);
+  });
+
+  try {
+    const result = await jobPromise;
+    return res.status(200).json(result);
+  } catch (error) {
     return res.status(500).json({
       status: 'FAILED',
       taskId,
       error: (error as Error).message
     });
-  } finally {
-    // 9. Cleanup
-    const filesToUnlink = [localInputPath, localOutputPath, fontPath];
-    if (localSoundtrackPath && localSoundtrackPath.startsWith(tmpDir)) {
-      filesToUnlink.push(localSoundtrackPath);
-    }
-    for (const filePath of filesToUnlink) {
-      try {
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
-      } catch (e) {
-        console.warn(`Failed to clean up ${filePath}:`, e);
-      }
+  }
+});
+
+// HTTP GET /queue/stats route handler
+app.get('/queue/stats', (req: Request, res: Response) => {
+  return res.status(200).json(renderQueueManager.getStats());
+});
+
+// HTTP POST /cleanup route handler (for manual trigger and stress testing)
+app.post('/cleanup', (req: Request, res: Response) => {
+  console.log('[Cleanup] Manual trigger received.');
+  cleanupExpiredAssets();
+  return res.status(200).json({ status: 'SUCCESS' });
+});
+
+// HTTP POST /cancel/:id route handler
+app.post('/cancel/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  console.log(`[Cancel Request] Ingestion cancellation check for: ${id}`);
+  
+  let success = renderQueueManager.cancelJob(id);
+  if (!success) {
+    // Attempt treating id as taskId
+    const job = renderQueueManager.getJobByTaskId(id);
+    if (job) {
+      success = renderQueueManager.cancelJob(job.jobId);
     }
   }
+
+  if (success) {
+    return res.status(200).json({ status: 'CANCELLED', id });
+  }
+  return res.status(404).json({ error: `Job or project task ${id} not found, or is not in an active/queued execution state.` });
 });
 
 // HTTP GET /status/:taskId route handler
@@ -1048,3 +1207,5 @@ if (process.env.RENDER_MODE === 'local') {
 app.listen(PORT, () => {
   console.log(`CineForge GCP Render Node listening on port ${PORT}`);
 });
+
+

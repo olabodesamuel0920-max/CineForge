@@ -11,6 +11,76 @@ import EditModeCard from '@/components/EditModeCard';
 import RightsSafetyNotice from '@/components/RightsSafetyNotice';
 import { Sparkles, Clapperboard, FolderGit2, AlertCircle, Loader2 } from 'lucide-react';
 
+// Style presets for CineForge Studio
+export const STYLE_PRESETS = [
+  {
+    id: 'bmw-commercial',
+    name: 'BMW Commercial',
+    mode: 'luxury-demon-reveal',
+    prompt: 'High-contrast commercial style edit. Dramatic shadow-rich lighting, reflections tracing curves of a sleek black vehicle, industrial hits syncing with rapid speed ramping transitions.',
+    duration: '15s',
+    platform: 'YouTube',
+    maxQualityMode: true,
+    estimatedRenderTime: '45-90s',
+    description: 'Ultra UHD cinematic vehicle showcase with gold/teal grading.'
+  },
+  {
+    id: 'luxury-fashion',
+    name: 'Luxury Fashion',
+    mode: 'fashion-drop-impact',
+    prompt: 'Minimalist fashion runway showcase. Warm desaturated tones, low warm saturation, jump cuts on garage beats, portrait frame centered, editorial typeface overlay.',
+    duration: '15s',
+    platform: 'Reels',
+    maxQualityMode: true,
+    estimatedRenderTime: '45-90s',
+    description: 'Clean jump-cuts and low-saturated editorial grading.'
+  },
+  {
+    id: 'product-reveal',
+    name: 'Product Reveal',
+    mode: 'product-awakening',
+    prompt: 'Macro close-up sweeps of a futuristic device. Sleek UI element lines pointing to key features, electrical sparks, tech beep sounds, mechanical clicking sync.',
+    duration: '10s',
+    platform: 'Shorts',
+    maxQualityMode: true,
+    estimatedRenderTime: '30-60s',
+    description: 'Extreme macro close-ups, wireframes, and tech risers.'
+  },
+  {
+    id: 'real-estate-showcase',
+    name: 'Real Estate Showcase',
+    mode: 'cinematic-brand-trailer',
+    prompt: 'Premium real estate walk-through. Warm cinematic orange-and-teal grading, soft orchestral strings, elegant slow panning.',
+    duration: '30s',
+    platform: 'YouTube',
+    maxQualityMode: true,
+    estimatedRenderTime: '90-180s',
+    description: 'Smooth gimbal pans, ambient piano, and warm sunlight.'
+  },
+  {
+    id: 'travel-reel',
+    name: 'Travel Reel',
+    mode: 'street-pulse-edit',
+    prompt: 'Fast-paced travel collage. Gritty film grain, hand-held camera movement, retro exposure flashes, hip-hop boom-bap cuts.',
+    duration: '15s',
+    platform: 'TikTok',
+    maxQualityMode: false,
+    estimatedRenderTime: '30-60s',
+    description: 'Handheld camera shakes, tape glitches, and gritty grain.'
+  },
+  {
+    id: 'viral-reel',
+    name: 'Viral Reel',
+    mode: 'boss-entrance',
+    prompt: 'Distorted bass cowboy phonk intro. High-contrast neon glows, dramatic freeze frame on key action moment with glowing text overlays.',
+    duration: '5s',
+    platform: 'Reels',
+    maxQualityMode: false,
+    estimatedRenderTime: '15-30s',
+    description: 'Distorted Cowbells, neon caption outlines, freeze-frames.'
+  }
+];
+
 export default function StudioPage() {
   const router = useRouter();
   
@@ -24,11 +94,45 @@ export default function StudioPage() {
   const [mediaFilename, setMediaFilename] = useState<string | null>(null);
   const [mediaSize, setMediaSize] = useState<string>('0 MB');
   const [videoDuration, setVideoDuration] = useState<number | undefined>(undefined);
+  const [sourceType, setSourceType] = useState<'upload' | 'demo'>('upload');
+  const [sourceUrl, setSourceUrl] = useState<string | undefined>(undefined);
   
   // Validation error state
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [tickerText, setTickerText] = useState('CONNECTING TO OUTBOUND NEURAL MODEL...');
+
+  // Preset Applier logic
+  const applyPreset = (preset: typeof STYLE_PRESETS[0]) => {
+    setTitle(`${preset.name} - Demo`);
+    setPrompt(preset.prompt);
+    setSelectedMode(preset.mode);
+    setDuration(preset.duration as ProjectDuration);
+    setPlatform(preset.platform as ProjectPlatform);
+    setMaxQualityMode(preset.maxQualityMode);
+    
+    // Auto-stage the demo video as a first class source
+    setMediaFilename('promo.mp4');
+    setMediaSize('242 KB');
+    setVideoDuration(15);
+    setSourceType('demo');
+    setSourceUrl('/uploads/promo.mp4');
+    setError(null);
+  };
+
+  // Mount logic: Parse URL parameters
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const presetId = params.get('preset');
+      if (presetId) {
+        const found = STYLE_PRESETS.find(p => p.id === presetId);
+        if (found) {
+          applyPreset(found);
+        }
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (!isSubmitting) return;
@@ -59,6 +163,8 @@ export default function StudioPage() {
     const sizeStr = `${(metadata.fileSize / (1024 * 1024)).toFixed(1)} MB`;
     setMediaSize(sizeStr);
     setVideoDuration(metadata.duration);
+    setSourceType(metadata.sourceType || 'upload');
+    setSourceUrl(metadata.sourceUrl);
     setError(null);
   };
 
@@ -66,6 +172,8 @@ export default function StudioPage() {
     setMediaFilename(null);
     setMediaSize('0 MB');
     setVideoDuration(undefined);
+    setSourceType('upload');
+    setSourceUrl(undefined);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -129,7 +237,9 @@ export default function StudioPage() {
         mediaSize,
         duration,
         platform,
-        prompt
+        prompt,
+        sourceType,
+        sourceUrl
       }, generatedBlueprint);
 
       // Ensure loader stays visible for at least 1500ms for premium kinetic feel
@@ -227,6 +337,40 @@ export default function StudioPage() {
             <span>{error}</span>
           </div>
         )}
+
+        {/* Style Presets Section */}
+        <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/25 flex flex-col gap-4">
+          <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+            <Sparkles className="w-4 h-4 text-brand-cyan animate-pulse" />
+            <h3 className="text-xs font-mono font-bold tracking-widest text-gray-400">
+              ONE-CLICK STYLE PRESETS (AUTO-LOAD & STAGE DEMO)
+            </h3>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {STYLE_PRESETS.map((preset) => {
+              const isSelected = selectedMode === preset.mode && title.startsWith(preset.name);
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => applyPreset(preset)}
+                  className={`p-3 rounded-lg border text-left flex flex-col gap-1.5 transition-all cursor-pointer ${
+                    isSelected
+                      ? 'border-brand-cyan/40 bg-brand-cyan/5 shadow-[0_0_15px_rgba(0,243,255,0.05)]'
+                      : 'border-white/5 bg-white/[0.01] hover:border-white/10 hover:bg-white/[0.02]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-gray-200 truncate">{preset.name}</span>
+                    <span className="text-[9px] font-mono text-brand-cyan px-1.5 py-0.5 rounded bg-brand-cyan/10 shrink-0 font-semibold">{preset.estimatedRenderTime}</span>
+                  </div>
+                  <span className="text-[10px] text-gray-400 leading-normal line-clamp-2 font-sans">{preset.description}</span>
+                  <span className="text-[9px] font-mono text-gray-500 mt-0.5 uppercase tracking-wider">{preset.duration} • {preset.platform}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {/* Main Configuration Grid Form */}
         <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-8">

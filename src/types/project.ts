@@ -48,6 +48,8 @@ export interface Project {
   status: PlatformStatus;
   createdAt: string;
   blueprint: EditDNABlueprint;
+  sourceType?: 'upload' | 'demo';
+  sourceUrl?: string;
 }
 
 export interface CreateProjectInput {
@@ -59,6 +61,8 @@ export interface CreateProjectInput {
   duration: ProjectDuration;
   platform: ProjectPlatform;
   prompt: string;
+  sourceType?: 'upload' | 'demo';
+  sourceUrl?: string;
 }
 
 export interface CineForgeMode {

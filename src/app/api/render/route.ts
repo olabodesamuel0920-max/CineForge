@@ -141,8 +141,13 @@ export async function POST(request: Request) {
     const codec = project.maxQualityMode ? 'hevc' : 'h264';
 
     // 4. Assemble the Zod-compatible Render Engine Payload
+    const isDemo = project.sourceType === 'demo' || project.mediaFilename === 'promo.mp4' || project.mediaFilename === '/uploads/promo.mp4';
+    const sourceVideoGcsUrl = isDemo
+      ? `gs://${bucketName}/raw/promo.mp4`
+      : `gs://${bucketName}/raw/${project.mediaFilename}`;
+
     const renderPayload = {
-      sourceVideoGcsUrl: `gs://${bucketName}/raw/${project.mediaFilename}`,
+      sourceVideoGcsUrl,
       blueprint: {
         timeline,
         color_grade: {

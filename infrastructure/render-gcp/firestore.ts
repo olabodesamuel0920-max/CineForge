@@ -1,7 +1,7 @@
 import { Firestore } from '@google-cloud/firestore';
 
 // In-memory progress cache for local testing mode
-const localProgressStore: Record<string, { percent: number; status: string; error?: string }> = {};
+const localProgressStore: Record<string, { percent: number; status: string; error?: string; diagnostics?: any; queuePosition?: number }> = {};
 
 let firestoreClient: Firestore | null = null;
 const COLLECTION_NAME = process.env.PROGRESS_COLLECTION_NAME || 'CineForgeProgress';
@@ -33,12 +33,14 @@ export async function updateProgress(
   taskId: string,
   percent: number,
   status: string,
-  error?: string
+  error?: string,
+  diagnostics?: any,
+  queuePosition?: number
 ): Promise<void> {
   const now = Date.now();
   
-  // Force update if it is a terminal state, completed, failed, or start of render
-  const isTerminal = percent === 100 || status === 'COMPLETED' || status === 'FAILED' || percent === 0 || percent === 2;
+  // Force update if it is a terminal state, completed, failed, queued, or start of render
+  const isTerminal = percent === 100 || status === 'COMPLETED' || status === 'FAILED' || percent === 0 || percent === 1 || percent === 2 || status.startsWith('QUEUED');
   
   if (!isTerminal && (now - lastDbUpdate < DB_UPDATE_INTERVAL)) {
     return; // Throttle write
@@ -50,7 +52,7 @@ export async function updateProgress(
   const client = getFirestore();
   if (!client) {
     console.log(`[Local Progress] TaskId: ${taskId} | ${percent}% | Status: ${status}${error ? ` | Error: ${error}` : ''}`);
-    localProgressStore[taskId] = { percent, status, error };
+    localProgressStore[taskId] = { percent, status, error, diagnostics, queuePosition };
     return;
   }
 
@@ -67,6 +69,14 @@ export async function updateProgress(
       updateData.Error = error;
     }
 
+    if (diagnostics !== undefined) {
+      updateData.Diagnostics = diagnostics;
+    }
+
+    if (queuePosition !== undefined) {
+      updateData.QueuePosition = queuePosition;
+    }
+
     // Set document with merge options to create or update existing progress logs
     await docRef.set(updateData, { merge: true });
   } catch (err) {
@@ -80,7 +90,7 @@ export async function updateProgress(
  */
 export async function getProgress(
   taskId: string
-): Promise<{ percent: number; status: string; error?: string } | null> {
+): Promise<{ percent: number; status: string; error?: string; diagnostics?: any; queuePosition?: number } | null> {
   const client = getFirestore();
   if (!client) {
     return localProgressStore[taskId] || null;
@@ -96,7 +106,9 @@ export async function getProgress(
     return {
       percent: data?.Percent ?? 0,
       status: data?.Status ?? 'UNKNOWN',
-      error: data?.Error
+      error: data?.Error,
+      diagnostics: data?.Diagnostics,
+      queuePosition: data?.QueuePosition
     };
   } catch (err) {
     console.error(`[TaskId: ${taskId}] Failed to read progress state from Firestore collection ${COLLECTION_NAME}:`, err);

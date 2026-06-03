@@ -52,6 +52,8 @@ export function saveLocalProject(input: CreateProjectInput, customBlueprint?: Ed
     status,
     createdAt,
     blueprint,
+    sourceType: input.sourceType,
+    sourceUrl: input.sourceUrl,
   };
 
   if (isClient()) {

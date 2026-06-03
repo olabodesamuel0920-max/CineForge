@@ -29,10 +29,10 @@ const DB_UPDATE_INTERVAL = 3000; // 3 seconds interval debounce
 /**
  * Updates the rendering progress in Google Cloud Firestore or local store.
  */
-async function updateProgress(taskId, percent, status, error) {
+async function updateProgress(taskId, percent, status, error, diagnostics, queuePosition) {
     const now = Date.now();
-    // Force update if it is a terminal state, completed, failed, or start of render
-    const isTerminal = percent === 100 || status === 'COMPLETED' || status === 'FAILED' || percent === 0 || percent === 2;
+    // Force update if it is a terminal state, completed, failed, queued, or start of render
+    const isTerminal = percent === 100 || status === 'COMPLETED' || status === 'FAILED' || percent === 0 || percent === 1 || percent === 2 || status.startsWith('QUEUED');
     if (!isTerminal && (now - lastDbUpdate < DB_UPDATE_INTERVAL)) {
         return; // Throttle write
     }
@@ -41,7 +41,7 @@ async function updateProgress(taskId, percent, status, error) {
     const client = getFirestore();
     if (!client) {
         console.log(`[Local Progress] TaskId: ${taskId} | ${percent}% | Status: ${status}${error ? ` | Error: ${error}` : ''}`);
-        localProgressStore[taskId] = { percent, status, error };
+        localProgressStore[taskId] = { percent, status, error, diagnostics, queuePosition };
         return;
     }
     try {
@@ -53,6 +53,12 @@ async function updateProgress(taskId, percent, status, error) {
         };
         if (error !== undefined) {
             updateData.Error = error;
+        }
+        if (diagnostics !== undefined) {
+            updateData.Diagnostics = diagnostics;
+        }
+        if (queuePosition !== undefined) {
+            updateData.QueuePosition = queuePosition;
         }
         // Set document with merge options to create or update existing progress logs
         await docRef.set(updateData, { merge: true });
@@ -80,7 +86,9 @@ async function getProgress(taskId) {
         return {
             percent: data?.Percent ?? 0,
             status: data?.Status ?? 'UNKNOWN',
-            error: data?.Error
+            error: data?.Error,
+            diagnostics: data?.Diagnostics,
+            queuePosition: data?.QueuePosition
         };
     }
     catch (err) {

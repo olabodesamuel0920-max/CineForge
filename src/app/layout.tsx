@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from 'next/link';
-import { Film, SquarePlay, FolderGit2 } from 'lucide-react';
+import { Film, SquarePlay, FolderGit2, Sparkles } from 'lucide-react';
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,7 +31,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-space-black text-gray-200">
         {/* Global Navigation Header */}
-        <header className="sticky top-0 z-50 w-full border-b border-white/5 bg-space-black/85 backdrop-blur-md">
+        <header id="global-nav-header" className="sticky top-0 z-50 w-full border-b border-white/5 bg-space-black/85 backdrop-blur-md">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             {/* Logo */}
             <Link href="/" className="flex items-center gap-2 group cursor-pointer">
@@ -45,6 +45,13 @@ export default function RootLayout({
 
             {/* Navigation links */}
             <nav className="flex items-center gap-1.5 sm:gap-4 md:gap-6">
+              <Link
+                href="/examples"
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs md:text-sm font-semibold text-gray-300 hover:text-brand-cyan hover:bg-white/5 transition-all cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 shrink-0 text-brand-cyan animate-pulse" />
+                <span>Examples</span>
+              </Link>
               <Link
                 href="/studio"
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs md:text-sm font-semibold text-gray-300 hover:text-brand-cyan hover:bg-white/5 transition-all cursor-pointer"

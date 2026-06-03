@@ -73,6 +73,7 @@ function mapPlatformStatusToDbStatus(status: PlatformStatus): 'draft' | 'uploade
 // Helper: map raw database rows back to Domain models
 function mapRowToProject(row: any): Project {
   const bp = row.blueprints ? (Array.isArray(row.blueprints) ? row.blueprints[0] : row.blueprints) : null;
+  const isDemo = row.media_filename === 'promo.mp4' || row.media_filename === '/uploads/promo.mp4';
   
   return {
     id: row.id,
@@ -85,6 +86,8 @@ function mapRowToProject(row: any): Project {
     platform: row.platform as ProjectPlatform,
     status: mapDbStatusToPlatformStatus(row.status, row.max_quality_mode ?? false),
     createdAt: row.created_at,
+    sourceType: row.source_type ?? (isDemo ? 'demo' : 'upload'),
+    sourceUrl: row.source_url ?? (isDemo ? '/uploads/promo.mp4' : undefined),
     blueprint: bp ? {
       editTitle: bp.edit_title,
       viewerEmotion: bp.viewer_emotion,
