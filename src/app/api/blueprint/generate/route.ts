@@ -80,7 +80,12 @@ export async function POST(request: Request) {
   let beatInterval = 0.50;
   let transients: number[] = [];
 
-  const renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL || 'http://localhost:8080';
+  let renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL || 'http://localhost:8080';
+  if (renderNodeUrl && !/^https?:\/\//i.test(renderNodeUrl)) {
+    const isLocalhost = renderNodeUrl.includes('localhost') || renderNodeUrl.includes('127.0.0.1');
+    renderNodeUrl = (isLocalhost ? 'http://' : 'https://') + renderNodeUrl.trim();
+  }
+  renderNodeUrl = renderNodeUrl.replace(/\/$/, '');
   try {
     console.log(`[AI Blueprint] Fetching audio transient peaks from: ${renderNodeUrl}/analyze-audio?track=${trackName}`);
     const analysisRes = await fetch(`${renderNodeUrl}/analyze-audio?track=${trackName}`, { 

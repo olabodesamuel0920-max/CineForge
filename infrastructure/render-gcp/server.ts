@@ -645,7 +645,13 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
 
     const requestedFps = payload.blueprint.export?.fps || 60;
     const fps = Math.min(requestedFps, Math.ceil(videoMetadata.fps));
-    let codec = payload.blueprint.export?.codec === 'hevc' ? 'libx265' : 'libx264';
+    
+    let codec = 'libx264';
+    if (payload.blueprint.export?.codec === 'hevc') {
+      codec = isQsvSupported ? 'hevc_qsv' : 'libx265';
+    } else {
+      codec = isQsvSupported ? 'h264_qsv' : 'libx264';
+    }
 
     ffmpegArgs.push(
       '-c:v', codec,

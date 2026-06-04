@@ -32,7 +32,11 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL;
+    let renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL;
+    if (renderNodeUrl && !/^https?:\/\//i.test(renderNodeUrl)) {
+      const isLocalhost = renderNodeUrl.includes('localhost') || renderNodeUrl.includes('127.0.0.1');
+      renderNodeUrl = (isLocalhost ? 'http://' : 'https://') + renderNodeUrl.trim();
+    }
     
     if (!renderNodeUrl) {
       return NextResponse.json(
@@ -40,10 +44,11 @@ export async function GET(
         { status: 500 }
       );
     }
+    renderNodeUrl = renderNodeUrl.replace(/\/$/, '');
     
     // Fetch current progress from the Render Node server status endpoint with retries
     const response = await fetchWithRetry(
-      `${renderNodeUrl.replace(/\/$/, '')}/status/${id}`,
+      `${renderNodeUrl}/status/${id}`,
       {
         method: 'GET',
         cache: 'no-store'

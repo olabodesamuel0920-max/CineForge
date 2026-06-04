@@ -6,7 +6,11 @@ export async function GET(
 ) {
   try {
     const { taskId } = await params;
-    const renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL;
+    let renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL;
+    if (renderNodeUrl && !/^https?:\/\//i.test(renderNodeUrl)) {
+      const isLocalhost = renderNodeUrl.includes('localhost') || renderNodeUrl.includes('127.0.0.1');
+      renderNodeUrl = (isLocalhost ? 'http://' : 'https://') + renderNodeUrl.trim();
+    }
     
     if (!renderNodeUrl) {
       return NextResponse.json(
@@ -15,7 +19,9 @@ export async function GET(
       );
     }
     
-    const response = await fetch(`${renderNodeUrl.replace(/\/$/, '')}/status/${taskId}`, {
+    renderNodeUrl = renderNodeUrl.replace(/\/$/, '');
+    
+    const response = await fetch(`${renderNodeUrl}/status/${taskId}`, {
       method: 'GET',
     });
     
