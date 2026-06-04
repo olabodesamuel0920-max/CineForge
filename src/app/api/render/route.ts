@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
+import { getRenderNodeUrl } from '@/lib/renderUrl';
 
 export async function POST(request: Request) {
   try {
@@ -46,20 +47,8 @@ export async function POST(request: Request) {
       );
     }
 
-    let renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL;
-    if (renderNodeUrl && !/^https?:\/\//i.test(renderNodeUrl)) {
-      const isLocalhost = renderNodeUrl.includes('localhost') || renderNodeUrl.includes('127.0.0.1');
-      renderNodeUrl = (isLocalhost ? 'http://' : 'https://') + renderNodeUrl.trim();
-    }
+    const renderNodeUrl = getRenderNodeUrl();
     const bucketName = process.env.GCS_BUCKET_NAME || 'cineforge-media-bucket';
-    
-    if (!renderNodeUrl) {
-      return NextResponse.json(
-        { error: 'Render Node URL is not configured. Please set RENDER_NODE_URL in your environment variables.' },
-        { status: 500 }
-      );
-    }
-    renderNodeUrl = renderNodeUrl.replace(/\/$/, '');
 
     const STRUCTURAL_TITLE_PATTERN = /^(intro|detail|energy|thematic|visual|narrative|hook|sequence|build|rise|drop|climax|cta|loop|seamless)/i;
 

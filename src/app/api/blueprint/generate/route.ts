@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { generateEditDNABlueprint } from '@/lib/blueprints';
 import { ProjectDuration, ProjectPlatform, EditDNABlueprint } from '@/types/project';
+import { getRenderNodeUrl } from '@/lib/renderUrl';
 
 // Zod schemas for input validation
 const requestSchema = z.object({
@@ -80,12 +81,7 @@ export async function POST(request: Request) {
   let beatInterval = 0.50;
   let transients: number[] = [];
 
-  let renderNodeUrl = process.env.RENDER_NODE_URL || process.env.NEXT_PUBLIC_RENDER_NODE_URL || 'http://localhost:8080';
-  if (renderNodeUrl && !/^https?:\/\//i.test(renderNodeUrl)) {
-    const isLocalhost = renderNodeUrl.includes('localhost') || renderNodeUrl.includes('127.0.0.1');
-    renderNodeUrl = (isLocalhost ? 'http://' : 'https://') + renderNodeUrl.trim();
-  }
-  renderNodeUrl = renderNodeUrl.replace(/\/$/, '');
+  const renderNodeUrl = getRenderNodeUrl('http://localhost:8080');
   try {
     console.log(`[AI Blueprint] Fetching audio transient peaks from: ${renderNodeUrl}/analyze-audio?track=${trackName}`);
     const analysisRes = await fetch(`${renderNodeUrl}/analyze-audio?track=${trackName}`, { 
