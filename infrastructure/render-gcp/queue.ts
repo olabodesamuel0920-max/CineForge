@@ -28,6 +28,9 @@ export interface RenderJob {
     outputSize?: number;
     error?: string;
     workerNode?: string;
+    videoDuration?: number;
+    resolution?: [number, number];
+    codec?: string;
   };
   resolve?: (value: any) => void;
   reject?: (reason: any) => void;

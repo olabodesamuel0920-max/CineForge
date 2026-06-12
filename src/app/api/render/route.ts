@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     const renderNodeUrl = getRenderNodeUrl();
     const bucketName = process.env.GCS_BUCKET_NAME || 'cineforge-media-bucket';
 
-    const STRUCTURAL_TITLE_PATTERN = /^(intro|detail|energy|thematic|visual|narrative|hook|sequence|build|rise|drop|climax|cta|loop|seamless)/i;
+    const STRUCTURAL_TITLE_PATTERN = /^(intro|detail|energy|thematic|visual|narrative|hook|sequence|build|rise|drop|climax|cta|loop|seamless|atmospheric|opener|subject|introduction|motion|kinetic|peak|vfx|outro|block)/i;
 
     function cleanTitle(title?: string): string | undefined {
       if (!title) return undefined;
@@ -101,7 +101,7 @@ export async function POST(request: Request) {
         start,
         end,
         speed,
-        text: cleanTitle(block.title),
+        text: cleanTitle(block.caption),
         vfx: vfx.length > 0 ? vfx : undefined,
         fracture: block.fracture ?? false,
         speedRamp: block.speedRamp || ''
@@ -169,6 +169,7 @@ export async function POST(request: Request) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-cineforge-worker-secret': process.env.RENDER_WORKER_SECRET || '',
       },
       body: JSON.stringify(renderPayload),
     });

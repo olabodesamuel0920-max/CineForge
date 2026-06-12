@@ -39,56 +39,64 @@ The codebase is **100% type-safe** and compiles successfully on both Next.js and
 
 ---
 
-## ⚠️ Where We Are Stuck (Critical Constraints)
+## ☁️ Production Cloud Deployment (GCP & Vercel)
 
-If you are continuing work on this codebase, you must respect these platform constraints:
+The app is now fully deployed in a hybrid cloud production environment, resolving all previous local development blockers:
 
-### 1. GCP Billing Limit (No Cloud Run Deploy)
-* **Blocker**: The GCP project (`cineforge-render-497509`) lacks an attached billing account. Google Cloud Build and Cloud Run deployments are blocked.
-* **Impact**: The worker **cannot** be deployed to Google Cloud Run. The environment **must run entirely on localhost** with local storage routes.
-* **Resolution**:
-  * Next.js running on `http://localhost:3000`
-  * Express Render Worker running on `http://localhost:8080`
-  * Set `RENDER_MODE=local` (or leave it undefined) in `.env.local` to trigger local directories instead of cloud GCS buckets.
+### 1. Google Cloud Platform (GCP) Infrastructure
+* **Active Project**: `cineforge-render-live-123456` (Billing Enabled)
+* **Express Render Worker (Cloud Run)**: Deployed as `cineforge-worker-service`
+  * **Endpoint**: `https://cineforge-worker-service-214796063144.us-central1.run.app`
+  * **Configuration**: `CPU = 2`, `Memory = 2Gi`, `Max Instances = 1`, and **CPU always allocated** (`--no-cpu-throttling`) to ensure background FFmpeg jobs run at full speed without container throttling.
+  * **Security**: API endpoints are hardened behind a secure custom header validation checking for `x-cineforge-worker-secret`. The root `/` health status is left public.
+* **Google Cloud Storage (GCS)**: Bucket `gs://cineforge-render-assets-live-123456` (us-central1) stores the raw assets (`/raw/`) and outputs (`/rendered/`).
+* **Firestore**: Native mode database (`nam5` multi-region) acts as the state store for transcode progress.
+* **IAM**:
+  * **Worker Service Account**: Compute Engine default (`214796063144-compute@developer.gserviceaccount.com`) has `roles/storage.admin`, `roles/artifactregistry.writer`, and `roles/iam.serviceAccountTokenCreator` (to allow v4 signed URL generation).
+  * **Vercel Service Account**: `vercel-sa@cineforge-render-live-123456.iam.gserviceaccount.com` has `roles/storage.admin` and `roles/datastore.user` to read transcode state and generate presigned signed read URLs for clients on Vercel.
 
-### 2. No Local Docker Sandbox
-* **Blocker**: The host machine runs WSL/Windows, and the Docker daemon cannot be started.
-* **Impact**: We cannot build or run the `Dockerfile` locally for local sandbox verification.
-* **Resolution**: All worker processes must run directly via node on the host (`npm run dev` inside `infrastructure/render-gcp`).
-
-### 3. File Paths and Storage
-* Uploads are saved directly to `public/uploads/` on the local file system.
-* Completed renders are copied to `public/renders/` on the local file system.
-* Next.js reads and writes projects to the database (or localStorage fallback if Supabase is unconfigured) and plays output videos directly from the `/renders/` route.
+### 2. Vercel Next.js Frontend
+* **Deploy URL**: `https://cine-forge.vercel.app`
+* **Vercel project environment variables**:
+  * `RENDER_MODE=cloud`
+  * `RENDER_NODE_URL=https://cineforge-worker-service-214796063144.us-central1.run.app`
+  * `GCS_BUCKET_NAME=cineforge-render-assets-live-123456`
+  * `RENDER_WORKER_SECRET=<secure-secret-rotated-do-not-commit-in-plain-text>`
+  * `GCP_PROJECT_ID=cineforge-render-live-123456`
+  * `GCP_CLIENT_EMAIL=vercel-sa@cineforge-render-live-123456.iam.gserviceaccount.com`
+  * `GCP_PRIVATE_KEY` (raw service account private key for GCS signing)
 
 ---
 
-## 🏃 How to Run the App Locally
+## 🏃 Running the App
 
-To start the local developer workspace:
+### Running in Cloud/Production Mode
+To update or deploy the production setup:
+1. **Redeploy Next.js Frontend to Vercel**:
+   ```bash
+   npx vercel --prod
+   ```
+2. **Recompile/Redeploy Render Worker (GCP Cloud Build & Cloud Run)**:
+   ```bash
+   # In root directory, submit source code to Google Cloud Build
+   gcloud builds submit --tag=us-central1-docker.pkg.dev/cineforge-render-live-123456/cineforge-repo/cineforge-worker:latest infrastructure/render-gcp
+   
+   # Deploy the compiled image to Cloud Run (with no-cpu-throttling)
+   gcloud run deploy cineforge-worker-service --image=us-central1-docker.pkg.dev/cineforge-render-live-123456/cineforge-repo/cineforge-worker:latest --platform=managed --region=us-central1 --max-instances=1 --cpu=2 --memory=2Gi --allow-unauthenticated --no-cpu-throttling --set-env-vars="RENDER_MODE=cloud,GCS_BUCKET_NAME=cineforge-render-assets-live-123456,RENDER_WORKER_SECRET=<secure-secret-rotated-do-not-commit-in-plain-text>"
+   ```
 
-### 1. Start the Render Worker (Port 8080)
-```bash
-cd infrastructure/render-gcp
-npm install
-npm run dev
-```
-
-### 2. Start the Next.js Frontend (Port 3000)
-```bash
-# In the root folder
-npm install
-npm run dev
-```
-
-### 3. Environment Setup (`.env.local` in root)
-Ensure the following variables are configured for local operation:
-```env
-RENDER_MODE=local
-RENDER_NODE_URL=http://localhost:8080
-NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-```
+### Running in Local Mode (Fallback)
+If running entirely on localhost is required:
+1. Set `RENDER_MODE=local` in `.env.local` (root) and in `infrastructure/render-gcp` configuration.
+2. Start the Render Worker:
+   ```bash
+   cd infrastructure/render-gcp
+   npm run dev
+   ```
+3. Start the Next.js Web App:
+   ```bash
+   npm run dev
+   ```
 
 ---
 
@@ -101,3 +109,4 @@ Refer to these files when editing the core engine:
 * **Next.js Status Proxy**: [status/[id]/route.ts](file:///c:/Users/colds/Documents/GitHub/CineForge/src/app/api/render/status/%5Bid%5D/route.ts)
 * **Worker Server Entry**: [server.ts](file:///c:/Users/colds/Documents/GitHub/CineForge/infrastructure/render-gcp/server.ts)
 * **FFmpeg Filter Compiler**: [ffmpeg.ts](file:///c:/Users/colds/Documents/GitHub/CineForge/infrastructure/render-gcp/ffmpeg.ts)
+

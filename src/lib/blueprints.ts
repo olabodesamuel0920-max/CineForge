@@ -32,7 +32,8 @@ export function generateEditDNABlueprint(
         visualCue: `${mode?.visualSignature.split(',')[0] || 'High-contrast framing'} with sharp forward push-in.`,
         audioAction: 'Sub-bass impact note + digital zoom whoosh.',
         speedRamp: 'Fast -> Slow (300% to 50%)',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -42,7 +43,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Extreme close-up focusing on dynamic textures, finishing with a quick flash frame.',
         audioAction: `${mode?.audioProfile.split(',')[0] || 'Heavy bass drop'} syncing with visual flash.`,
         speedRamp: 'Sudden ramp down (100% to 25% on beat, then 100%)',
-        fracture: true
+        fracture: true,
+        caption: ""
       }
     );
   } else if (durationSec === 10) {
@@ -55,7 +57,8 @@ export function generateEditDNABlueprint(
         visualCue: 'High-contrast tracking shot with high-speed shutter look.',
         audioAction: 'Reverse swell transition + sharp industrial snap.',
         speedRamp: 'Speed Ramp: 250% -> 50% on beat',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -65,7 +68,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Macro panning shots showing lighting shifts, shadows, and contours.',
         audioAction: 'Pulsing synth riser building in volume and high-frequency harmonics.',
         speedRamp: 'Linear slow motion (50% constant)',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -75,7 +79,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Whip-pan transition leading to low-angle hero framing with light flares.',
         audioAction: `${mode?.audioProfile.split(',')[2] || 'Distorted sub-bass drop'} with heavy kick snap.`,
         speedRamp: 'Hyper-ramp (400% -> 100% -> 25% on final hit)',
-        fracture: true
+        fracture: true,
+        caption: ""
       }
     );
   } else if (durationSec === 15) {
@@ -88,7 +93,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Slow zoom-in through light leak layers or custom vignette overlay.',
         audioAction: 'Deep atmospheric drone + high-pitch clock ticking sound.',
         speedRamp: 'Normal Speed (100%)',
-        fracture: false
+        fracture: false,
+        caption: ""
       },
       {
         id: generateId(),
@@ -98,7 +104,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Tracking shot following subject movement, employing motion blur frames.',
         audioAction: 'Rhythmic bass kick drums aligning with footsteps or mechanical clicks.',
         speedRamp: 'Variable Ramping: 200% -> 75%',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -108,7 +115,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Particle sweeps or digital overlays highlighting details, glitch transitions.',
         audioAction: 'Explosive sub hit + melodic synth chord release.',
         speedRamp: 'Frame-rate slow down to 25% (simulated high frame rate)',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -118,7 +126,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Smooth gimbal back-pedal, fading to custom cinematic black border.',
         audioAction: 'Sustained reverb tail of music + low-pass filter sweep.',
         speedRamp: 'Gradual slow down: 100% -> 50%',
-        fracture: false
+        fracture: false,
+        caption: "CINEFORGE"
       }
     );
   } else {
@@ -132,7 +141,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Desaturated wide establishing shot with anamorphic crop.',
         audioAction: 'Minimal ambient piano chord + vinyl dust rumble.',
         speedRamp: 'Normal (100%)',
-        fracture: false
+        fracture: false,
+        caption: ""
       },
       {
         id: generateId(),
@@ -142,7 +152,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Series of 3 close-up match-cuts focusing on texture and design details.',
         audioAction: 'Adding electronic arpeggio elements and clock-ticking layers.',
         speedRamp: 'Slow-motion sweeps (40%)',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -152,7 +163,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Rapid whip-pans, camera shake overlays, and high shutter frame rates.',
         audioAction: 'Snare roll rise + rising synth frequencies + heart-beat acceleration.',
         speedRamp: 'Dynamic ramps: 100% -> 300% -> 100% -> 400% on cuts',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -162,7 +174,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Full cinematic performance scene, high action, volumetric lighting sweeps.',
         audioAction: 'Main bass drop with heavy industrial metallic clanks and full melody.',
         speedRamp: 'Slow-mo drops (25% on action points, 100% on recovery)',
-        fracture: true
+        fracture: true,
+        caption: ""
       },
       {
         id: generateId(),
@@ -172,7 +185,8 @@ export function generateEditDNABlueprint(
         visualCue: 'Whip pan back to matching start position or clean central branding card.',
         audioAction: 'Echo filter sweep, sudden music cut, loop-ready ambient drone.',
         speedRamp: 'Fast whip ramp: 100% -> 500% -> 100%',
-        fracture: false
+        fracture: false,
+        caption: "BUILD YOURS AT CINEFORGE.COM"
       }
     );
   }

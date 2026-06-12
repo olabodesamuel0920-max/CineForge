@@ -35,12 +35,14 @@ export async function GET(
     const { id } = await params;
     const renderNodeUrl = getRenderNodeUrl();
     
-    // Fetch current progress from the Render Node server status endpoint with retries
     const response = await fetchWithRetry(
       `${renderNodeUrl}/status/${id}`,
       {
         method: 'GET',
-        cache: 'no-store'
+        cache: 'no-store',
+        headers: {
+          'x-cineforge-worker-secret': process.env.RENDER_WORKER_SECRET || '',
+        }
       },
       3,
       200

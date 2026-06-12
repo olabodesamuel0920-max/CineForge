@@ -11,6 +11,9 @@ export async function GET(
     
     const response = await fetch(`${renderNodeUrl}/status/${taskId}`, {
       method: 'GET',
+      headers: {
+        'x-cineforge-worker-secret': process.env.RENDER_WORKER_SECRET || '',
+      }
     });
     
     if (!response.ok) {

@@ -1,0 +1,19 @@
+# Ignore infrastructure render node directory
+infrastructure/
+
+# Ignore local next.js build output
+.next/
+
+# Ignore node modules
+node_modules/
+
+# Ignore env files
+.env*
+
+# Ignore git
+.git/
+
+# Ignore local renders and uploads except the promo demo video
+public/renders/
+public/uploads/*
+!public/uploads/promo.mp4

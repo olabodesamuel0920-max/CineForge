@@ -22,6 +22,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [estTime, setEstTime] = useState<number>(0);
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [diagnostics, setDiagnostics] = useState<any>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Sync state from project on mount or project changes
@@ -90,6 +91,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
         if (nextStatus === 'completed') {
           setStep('COMPLETED');
           setOutputUrl(data.outputUrl || `/renders/output-${project.id}.mp4`);
+          setDiagnostics(data.diagnostics || null);
           stopPolling();
           
           // Trigger dynamic parent page path switch: raw asset -> output-rendered file
@@ -362,13 +364,43 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
               <p className="text-gray-300 leading-relaxed text-[11px]">
                 The EditDNA has been successfully compiled into a portrait MP4 and cached to local public workspace.
               </p>
+
+              {/* Render success metadata */}
+              {diagnostics && (
+                <div className="p-3 rounded bg-black/40 border border-white/5 text-[10px] text-gray-400 flex flex-col gap-1.5 leading-normal">
+                  <div className="font-bold text-gray-200 uppercase tracking-wider border-b border-white/5 pb-1 mb-1">Render Metadata</div>
+                  <div className="flex justify-between">
+                    <span>Duration:</span>
+                    <span className="text-gray-200">{diagnostics.videoDuration ? `${diagnostics.videoDuration.toFixed(1)}s` : '15.0s'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Resolution:</span>
+                    <span className="text-gray-200">{diagnostics.resolution ? `${diagnostics.resolution[0]}x${diagnostics.resolution[1]}` : '1080x1920'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>File Size:</span>
+                    <span className="text-gray-200">
+                      {diagnostics.outputSize ? `${(diagnostics.outputSize / 1024 / 1024).toFixed(2)} MB` : 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Render Time:</span>
+                    <span className="text-gray-200">{diagnostics.renderDuration ? `${diagnostics.renderDuration.toFixed(1)}s` : 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Codec/Format:</span>
+                    <span className="text-gray-200 uppercase">{diagnostics.codec || 'H.264'}</span>
+                  </div>
+                </div>
+              )}
+
               {outputUrl && (
                 <a
                   href={outputUrl}
                   download={`rendered-${project.id}.mp4`}
                   className="mt-1 py-2 rounded bg-brand-green text-space-black font-bold text-center flex items-center justify-center gap-1.5 hover:bg-brand-green/90 transition-colors shadow-[0_0_10px_rgba(46,213,115,0.2)]"
                 >
-                  <Download className="w-4 h-4" /> Save Output Video
+                  <Download className="w-4 h-4" /> Download final video
                 </a>
               )}
             </div>
@@ -377,6 +409,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
               onClick={() => {
                 setStep('IDLE');
                 setPercent(0);
+                setDiagnostics(null);
                 updateParentProject('Provider Connection Pending');
               }}
               className="w-full py-2 border border-white/5 bg-white/[0.02] text-gray-400 hover:text-white rounded text-center flex items-center justify-center gap-1.5 transition-all text-[11px]"

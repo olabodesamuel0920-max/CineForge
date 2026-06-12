@@ -647,14 +647,18 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
     const fps = Math.min(requestedFps, Math.ceil(videoMetadata.fps));
     
     let codec = 'libx264';
+    let bitrateArgs: string[] = [];
     if (payload.blueprint.export?.codec === 'hevc') {
       codec = isQsvSupported ? 'hevc_qsv' : 'libx265';
+      bitrateArgs = ['-b:v', '5M', '-maxrate', '7M', '-bufsize', '10M'];
     } else {
       codec = isQsvSupported ? 'h264_qsv' : 'libx264';
+      bitrateArgs = ['-b:v', '7M', '-maxrate', '9M', '-bufsize', '14M'];
     }
 
     ffmpegArgs.push(
       '-c:v', codec,
+      ...bitrateArgs,
       '-preset', 'veryfast',
       '-r', fps.toString(),
       '-pix_fmt', 'yuv420p',
@@ -696,7 +700,10 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
       uploadDuration,
       totalDuration: totalJobDuration,
       outputSize,
-      workerNode: `${require('os').hostname()}:${process.pid}`
+      workerNode: `${require('os').hostname()}:${process.pid}`,
+      videoDuration: totalDuration,
+      resolution: payload.blueprint.export?.resolution || [1080, 1920],
+      codec: codec
     };
 
     console.log(`[Queue] Render Job ${job.jobId} completed successfully in ${totalJobDuration.toFixed(1)}s.`);
@@ -1035,8 +1042,27 @@ renderQueueManager.executePreviewRunner = async (job: RenderJob) => {
   }
 };
 
+// --- Security Hardening Middleware & Public Health Check ---
+const RENDER_WORKER_SECRET = process.env.RENDER_WORKER_SECRET;
+
+const authMiddleware = (req: Request, res: Response, next: () => void) => {
+  if (RENDER_WORKER_SECRET) {
+    const reqSecret = req.headers['x-cineforge-worker-secret'];
+    if (reqSecret !== RENDER_WORKER_SECRET) {
+      console.warn(`[Security] Unauthorized access attempt to ${req.path} from IP ${req.ip}`);
+      return res.status(401).json({ error: 'Unauthorized: Missing or invalid x-cineforge-worker-secret header.' });
+    }
+  }
+  next();
+};
+
+// Harmless public health check endpoint
+app.get('/', (req: Request, res: Response) => {
+  res.status(200).json({ status: 'OK', message: 'CineForge GCP Render Node is active and healthy.' });
+});
+
 // HTTP POST /render route handler - Queue Enqueueing Flow
-app.post('/render', async (req: Request, res: Response) => {
+app.post('/render', authMiddleware, async (req: Request, res: Response) => {
   const taskId = req.body.taskId || `task-${Math.random().toString(36).substring(2, 11)}`;
   console.log(`[TaskId: ${taskId}] Ingestion request for master render.`);
 
@@ -1058,7 +1084,7 @@ app.post('/render', async (req: Request, res: Response) => {
 });
 
 // HTTP POST /render/preview route handler - Awaiting Queue Execution Flow
-app.post('/render/preview', async (req: Request, res: Response) => {
+app.post('/render/preview', authMiddleware, async (req: Request, res: Response) => {
   const taskId = req.body.taskId || `preview-${Math.random().toString(36).substring(2, 11)}`;
   console.log(`[TaskId: ${taskId}] Ingestion request for timeline seek preview.`);
 
@@ -1087,19 +1113,19 @@ app.post('/render/preview', async (req: Request, res: Response) => {
 });
 
 // HTTP GET /queue/stats route handler
-app.get('/queue/stats', (req: Request, res: Response) => {
+app.get('/queue/stats', authMiddleware, (req: Request, res: Response) => {
   return res.status(200).json(renderQueueManager.getStats());
 });
 
 // HTTP POST /cleanup route handler (for manual trigger and stress testing)
-app.post('/cleanup', (req: Request, res: Response) => {
+app.post('/cleanup', authMiddleware, (req: Request, res: Response) => {
   console.log('[Cleanup] Manual trigger received.');
   cleanupExpiredAssets();
   return res.status(200).json({ status: 'SUCCESS' });
 });
 
 // HTTP POST /cancel/:id route handler
-app.post('/cancel/:id', (req: Request, res: Response) => {
+app.post('/cancel/:id', authMiddleware, (req: Request, res: Response) => {
   const { id } = req.params;
   console.log(`[Cancel Request] Ingestion cancellation check for: ${id}`);
   
@@ -1119,7 +1145,7 @@ app.post('/cancel/:id', (req: Request, res: Response) => {
 });
 
 // HTTP GET /status/:taskId route handler
-app.get('/status/:taskId', async (req: Request, res: Response) => {
+app.get('/status/:taskId', authMiddleware, async (req: Request, res: Response) => {
   const { taskId } = req.params;
   if (!taskId) {
     return res.status(400).json({ error: 'Missing taskId parameter' });
@@ -1134,7 +1160,7 @@ app.get('/status/:taskId', async (req: Request, res: Response) => {
 });
 
 // HTTP GET /analyze-audio route handler
-app.get('/analyze-audio', async (req: Request, res: Response) => {
+app.get('/analyze-audio', authMiddleware, async (req: Request, res: Response) => {
   const { track } = req.query;
   if (!track || typeof track !== 'string') {
     return res.status(400).json({ error: 'Missing track query parameter' });

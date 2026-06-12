@@ -19,6 +19,7 @@ export interface TimelineBlock {
   audioAction: string;
   speedRamp: string; // e.g. "Normal", "Fast-In / Slow-Out (400% -> 100%)"
   fracture?: boolean;
+  caption?: string;
 }
 
 export interface EditDNABlueprint {

@@ -23,7 +23,8 @@ const llmTimelineBlockSchema = z.object({
   visualCue: z.string(),
   audioAction: z.string(),
   speedRamp: z.string(),
-  fracture: z.boolean()
+  fracture: z.boolean(),
+  caption: z.string()
 });
 
 const llmBlueprintSchema = z.object({
@@ -85,7 +86,10 @@ export async function POST(request: Request) {
   try {
     console.log(`[AI Blueprint] Fetching audio transient peaks from: ${renderNodeUrl}/analyze-audio?track=${trackName}`);
     const analysisRes = await fetch(`${renderNodeUrl}/analyze-audio?track=${trackName}`, { 
-      signal: AbortSignal.timeout(6000) 
+      signal: AbortSignal.timeout(6000),
+      headers: {
+        'x-cineforge-worker-secret': process.env.RENDER_WORKER_SECRET || ''
+      }
     });
     if (analysisRes.ok) {
       const analysisData = await analysisRes.json();
@@ -122,6 +126,9 @@ CRITICAL PACING, TRANSITION, AND FRACTURE LAWS:
 2. The transition from "Energy Build" to "Climax" is the most high-impact moment. You MUST snap this block boundary to a transient timestamp.
 3. Scale speed multipliers and ramp-downs (e.g. 0.5x or 0.25x slow-mo) to land precisely at the beat cut. Note: Limit audio slow-down requests to >= 0.5x to prevent pitch-distortion issues, or accept that sub-0.5x speeds will apply pitch-shift corrections.
 4. Define the fracture boolean flag for each block. Set fracture: true on high-energy blocks (like the Detail Sequence, Energy Build, and Climax) when you want the rendering worker to chop the segment into rapid, beat-synced micro-clips. Keep it false for slow, linear, outro, or atmospheric opener segments.
+5. TEXT OVERLAYS: 
+   - The 'title' field is STRICTLY for internal structural block names (e.g., 'Atmospheric Opener', 'Subject Introduction & Motion', 'Kinetic Drop & Peak VFX', 'Detail Sequence', 'Intro Narrative Hook', 'Climax', 'Outro', 'CTA Block'). These structural titles are internal and will NOT be rendered as overlays.
+   - The 'caption' field is for the actual viewer-facing text overlay (such as a hook caption, brand line, call-to-action, subtitle, or caption). If a block should not show any text overlay, you MUST set 'caption' to an empty string "".
 
 Ensure you scale the pacing parameters, cut frequencies, and visual intensity based on these constraints. For instance, vertical formats like TikTok or YouTube Shorts need immediate high-impact hooks and rapid speed ramping, whereas YouTube landscape clips can support a slower cinematic build-up.`;
 
@@ -173,9 +180,10 @@ Ensure you scale the pacing parameters, cut frequencies, and visual intensity ba
                         visualCue: { type: 'STRING' },
                         audioAction: { type: 'STRING' },
                         speedRamp: { type: 'STRING' },
-                        fracture: { type: 'BOOLEAN' }
+                        fracture: { type: 'BOOLEAN' },
+                        caption: { type: 'STRING' }
                       },
-                      required: ['startTime', 'endTime', 'title', 'description', 'visualCue', 'audioAction', 'speedRamp', 'fracture']
+                      required: ['startTime', 'endTime', 'title', 'description', 'visualCue', 'audioAction', 'speedRamp', 'fracture', 'caption']
                     }
                   },
                   cutRhythm: { type: 'STRING' },
@@ -197,6 +205,7 @@ Ensure you scale the pacing parameters, cut frequencies, and visual intensity ba
           })
         }
       );
+
 
       if (!response.ok) {
         throw new Error(`Gemini API returned status code ${response.status}`);
@@ -275,7 +284,8 @@ Ensure you scale the pacing parameters, cut frequencies, and visual intensity ba
         visualCue: block.visualCue,
         audioAction: block.audioAction,
         speedRamp: block.speedRamp,
-        fracture: block.fracture
+        fracture: block.fracture,
+        caption: block.caption
       };
     });
 

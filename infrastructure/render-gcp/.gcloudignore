@@ -1,0 +1,7 @@
+node_modules/
+dist/
+tmp/
+assets/audio/
+public/renders/
+.git/
+.gcloudignore
