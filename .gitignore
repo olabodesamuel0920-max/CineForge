@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# CineForge uploads and renders
+/public/renders/
+/public/uploads/*
+!/public/uploads/promo.mp4
+

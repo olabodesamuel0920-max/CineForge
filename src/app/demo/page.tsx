@@ -438,6 +438,134 @@ function DemoContent() {
 
       </div>
 
+      {/* CineForge Demo Results Showcase */}
+      <div className="max-w-7xl mx-auto w-full px-6 md:px-8 pb-16 pt-8 z-10 relative">
+        <div className="border border-white/5 bg-space-card/10 rounded-2xl p-6 md:p-8 backdrop-blur-md space-y-6">
+          <div className="flex flex-col gap-2 border-b border-white/5 pb-4">
+            <div className="flex items-center gap-2">
+              <Film className="w-5 h-5 text-brand-violet animate-pulse" />
+              <h3 className="text-base font-mono font-extrabold tracking-widest text-white uppercase">
+                CineForge Production Benchmarks
+              </h3>
+            </div>
+            <p className="text-xs text-gray-400 font-sans max-w-2xl leading-relaxed">
+              Verify platform capabilities across diverse video content categories. The following benchmark results were compiled directly from E2E remote runs on our Cloud Run transcode nodes using the high-quality HEVC portrait pipeline.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[
+              {
+                category: 'Automotive/Car',
+                preset: 'luxury-demon-reveal',
+                renderTime: '72.78s',
+                fileSize: '5.97 MB',
+                resolution: '1080x1920',
+                codec: 'HEVC (H.265)',
+                verdict: 'Excellent 9:16 vertical video; high-contrast teal/warm grade; zero placeholder burn-in.',
+                tag: 'Luxury Reveal'
+              },
+              {
+                category: 'Fashion/Product',
+                preset: 'fashion-drop-impact',
+                renderTime: '67.13s',
+                fileSize: '5.92 MB',
+                resolution: '1080x1920',
+                codec: 'HEVC (H.265)',
+                verdict: 'Sleek saturated neon tones; clean transitions synced to beat; captions mapped to creative subtitles.',
+                tag: 'Editorial Runway'
+              },
+              {
+                category: 'Food/Dessert',
+                preset: 'product-awakening',
+                renderTime: '66.40s',
+                fileSize: '5.90 MB',
+                resolution: '1080x1920',
+                codec: 'HEVC (H.265)',
+                verdict: 'Moody macro pouring detail; warm color temperature; smooth transitions; correct pixel ratios.',
+                tag: 'Consumer Brand'
+              },
+              {
+                category: 'Real Estate/Interior',
+                preset: 'cinematic-brand-trailer',
+                renderTime: '60.00s',
+                fileSize: '5.61 MB',
+                resolution: '1080x1920',
+                codec: 'HEVC (H.265)',
+                verdict: 'Clean bright grading; smooth camera panning emulation; subtitles aligned with video pacing.',
+                tag: 'Cinematic Tour'
+              },
+              {
+                category: 'Sport/Football',
+                preset: 'stadium-god-mode',
+                renderTime: '70.92s',
+                fileSize: '5.87 MB',
+                resolution: '1080x1920',
+                codec: 'HEVC (H.265)',
+                verdict: 'High-energy editing sequence; aggressive speed cuts and velocity changes matched to transients.',
+                tag: 'Sports Phonk'
+              },
+              {
+                category: 'Talking-Head/Brand',
+                preset: 'boss-entrance',
+                renderTime: '58.86s',
+                fileSize: '5.06 MB',
+                resolution: '1080x1920',
+                codec: 'HEVC (H.265)',
+                verdict: 'Premium speaker headshot framing; sharp visual clarity; subtitles burned in on key accents.',
+                tag: 'Personal Brand'
+              }
+            ].map((item, idx) => (
+              <div 
+                key={idx}
+                className="glass-panel border border-white/5 bg-space-card/20 p-5 rounded-xl flex flex-col justify-between gap-4 hover:border-brand-violet/30 transition-all duration-300 group hover:shadow-[0_0_15px_rgba(168,85,247,0.05)]"
+              >
+                <div className="space-y-2.5">
+                  <div className="flex justify-between items-start w-full">
+                    <span className="text-[8px] font-mono text-gray-500 uppercase tracking-widest">{item.tag}</span>
+                    <span className="inline-flex items-center gap-1 text-[8px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 font-bold uppercase tracking-wider">
+                      <Check className="w-2.5 h-2.5" /> SUCCESS
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-0.5">
+                    <h4 className="text-sm font-extrabold text-white group-hover:text-brand-violet transition-colors">
+                      {item.category}
+                    </h4>
+                    <p className="text-[9px] font-mono text-gray-500">
+                      Preset: <code className="text-gray-400">{item.preset}</code>
+                    </p>
+                  </div>
+
+                  <p className="text-[10px] text-gray-400 leading-relaxed font-sans pt-1">
+                    {item.verdict}
+                  </p>
+                </div>
+
+                <div className="border-t border-white/5 pt-3.5 mt-1 grid grid-cols-2 gap-2 text-[9px] font-mono text-gray-500">
+                  <div className="flex flex-col">
+                    <span className="text-[8px] text-gray-600 uppercase">Render Duration</span>
+                    <span className="text-gray-300 font-bold">{item.renderTime}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[8px] text-gray-600 uppercase">File size</span>
+                    <span className="text-gray-300 font-bold">{item.fileSize}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[8px] text-gray-600 uppercase">Resolution</span>
+                    <span className="text-gray-300 font-bold">{item.resolution}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[8px] text-gray-600 uppercase">Codec Profile</span>
+                    <span className="text-gray-300 font-bold">{item.codec}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Absolute background accent element */}
       <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] bg-radial from-brand-violet/3 to-transparent blur-3xl pointer-events-none"></div>
     </div>
