@@ -12,9 +12,10 @@ interface BlueprintTimelineProps {
   project?: Project;
   onPreviewUrl?: (url: string) => void;
   onCreditExhausted?: () => void;
+  onTimelineChange?: (newBlocks: TimelineBlock[]) => void;
 }
 
-export default function BlueprintTimeline({ blocks, accentColor = 'cyan', project, onPreviewUrl, onCreditExhausted }: BlueprintTimelineProps) {
+export default function BlueprintTimeline({ blocks, accentColor = 'cyan', project, onPreviewUrl, onCreditExhausted, onTimelineChange }: BlueprintTimelineProps) {
   const [expandedBlock, setExpandedBlock] = useState<string | null>(blocks[0]?.id || null);
   const [previewingBlockId, setPreviewingBlockId] = useState<string | null>(null);
 
@@ -89,6 +90,93 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan', projec
     }
   };
 
+  const handleCaptionChange = (index: number, val: string) => {
+    const newBlocks = [...blocks];
+    newBlocks[index] = { ...newBlocks[index], caption: val };
+    if (onTimelineChange) {
+      onTimelineChange(newBlocks);
+    }
+  };
+
+  const handleSpeedRampChange = (index: number, val: string) => {
+    const newBlocks = [...blocks];
+    newBlocks[index] = { ...newBlocks[index], speedRamp: val };
+    if (onTimelineChange) {
+      onTimelineChange(newBlocks);
+    }
+  };
+
+  const handleVisualCueChange = (index: number, val: string) => {
+    const newBlocks = [...blocks];
+    newBlocks[index] = { ...newBlocks[index], visualCue: val };
+    if (onTimelineChange) {
+      onTimelineChange(newBlocks);
+    }
+  };
+
+  const handleAudioActionChange = (index: number, val: string) => {
+    const newBlocks = [...blocks];
+    newBlocks[index] = { ...newBlocks[index], audioAction: val };
+    if (onTimelineChange) {
+      onTimelineChange(newBlocks);
+    }
+  };
+
+  const handleDurationChange = (index: number, newDur: number) => {
+    if (isNaN(newDur) || newDur < 0.5) newDur = 0.5;
+    
+    // Round to 1 decimal place to prevent float precision drift
+    newDur = Math.round(newDur * 10) / 10;
+
+    const newBlocks = [...blocks];
+    const oldDurations = newBlocks.map(b => {
+      const matches = b.timestamp.match(/([\d\.]+)\s*s?\s*-\s*([\d\.]+)\s*s?/);
+      return matches ? Math.round((parseFloat(matches[2]) - parseFloat(matches[1])) * 10) / 10 : 5.0;
+    });
+
+    const targetIndex = index;
+    let delta = Math.round((oldDurations[targetIndex] - newDur) * 10) / 10;
+
+    const newDurations = [...oldDurations];
+    newDurations[targetIndex] = newDur;
+
+    // Propagate delta to subsequent blocks
+    for (let i = targetIndex + 1; i < newDurations.length; i++) {
+      const originalDur = newDurations[i];
+      let proposedDur = Math.round((originalDur + delta) * 10) / 10;
+      if (proposedDur < 0.5) {
+        newDurations[i] = 0.5;
+        delta = Math.round((originalDur + delta - 0.5) * 10) / 10;
+      } else {
+        newDurations[i] = proposedDur;
+        delta = 0;
+        break;
+      }
+    }
+
+    // If there's still delta leftover, clamp the target block duration to satisfy constraints
+    if (delta !== 0) {
+      newDurations[targetIndex] = Math.round((newDurations[targetIndex] + delta) * 10) / 10;
+    }
+
+    // Reconstruct timestamps
+    let currentStart = 0.0;
+    const updatedBlocks = newBlocks.map((b, i) => {
+      const dur = newDurations[i];
+      const startStr = currentStart.toFixed(1);
+      const endStr = (currentStart + dur).toFixed(1);
+      currentStart = Math.round((currentStart + dur) * 10) / 10;
+      return {
+        ...b,
+        timestamp: `${startStr}s - ${endStr}s`
+      };
+    });
+
+    if (onTimelineChange) {
+      onTimelineChange(updatedBlocks);
+    }
+  };
+
   const getAccentClass = (color: string) => {
     switch (color) {
       case 'amber': return 'border-brand-amber text-brand-amber';
@@ -103,7 +191,7 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan', projec
   return (
     <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/30 flex flex-col gap-4">
       <div className="flex items-center justify-between border-b border-white/5 pb-3">
-        <h4 className="text-xs font-mono font-bold tracking-widest text-gray-400">EDITDNA TIMELINE BLUEPRINT</h4>
+        <h4 className="text-xs font-mono font-bold tracking-widest text-gray-400">EDITDNA TIMELINE OS</h4>
         <span className="text-[10px] font-mono text-gray-400">
           {blocks.length} EDIT SEGMENTS
         </span>
@@ -113,6 +201,10 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan', projec
         {blocks.map((block, index) => {
           const isExpanded = expandedBlock === block.id;
           const accent = getAccentClass(accentColor);
+          
+          // Calculate current block duration for display
+          const matches = block.timestamp.match(/([\d\.]+)\s*s?\s*-\s*([\d\.]+)\s*s?/);
+          const blockDuration = matches ? Math.round((parseFloat(matches[2]) - parseFloat(matches[1])) * 10) / 10 : 5.0;
 
           return (
             <div key={block.id} className="relative group">
@@ -187,40 +279,79 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan', projec
                       transition={{ duration: 0.2 }}
                       className="overflow-hidden"
                     >
-                      <div className="p-3 pt-0 border-t border-white/5 flex flex-col gap-3">
-                        <p className="text-xs text-gray-300 leading-relaxed font-sans pt-3">
+                      <div className="p-4 pt-0 border-t border-white/5 flex flex-col gap-4">
+                        <p className="text-[11px] text-gray-400 leading-normal font-sans pt-3 italic">
                           {block.description}
                         </p>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
-                          <div className="p-2.5 rounded bg-space-black/50 border border-white/[0.03] flex flex-col gap-1">
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-gray-400 font-bold tracking-wide uppercase">
+                        {/* Interactive Editor Controls */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[9px] font-mono text-gray-500 font-bold uppercase tracking-wider">Viewer Caption</label>
+                            <input
+                              type="text"
+                              value={block.caption || ''}
+                              onChange={(e) => handleCaptionChange(index, e.target.value)}
+                              className="bg-[#050508]/85 border border-white/10 rounded px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-brand-cyan/60 font-sans"
+                              placeholder="No overlay subtitle"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[9px] font-mono text-gray-500 font-bold uppercase tracking-wider">Duration (sec)</label>
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0.5"
+                              value={blockDuration}
+                              onChange={(e) => handleDurationChange(index, parseFloat(e.target.value))}
+                              className="bg-[#050508]/85 border border-white/10 rounded px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-brand-cyan/60 font-mono"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[9px] font-mono text-gray-500 font-bold uppercase tracking-wider">Speed Ramp mapping</label>
+                            <select
+                              value={block.speedRamp || 'Normal'}
+                              onChange={(e) => handleSpeedRampChange(index, e.target.value)}
+                              className="bg-[#050508]/85 border border-white/10 rounded px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-brand-cyan/60 font-mono cursor-pointer"
+                            >
+                              <option value="Normal">Normal (100% Speed)</option>
+                              <option value="Slow-mo (50% Speed)">Slow Motion (50% Speed)</option>
+                              <option value="Quarter Speed (25% Speed)">Quarter Speed (25% Speed)</option>
+                              <option value="Fast-In / Slow-Out (200% -> 100%)">Fast Motion (200% Speed)</option>
+                              <option value="Fast (300% Speed)">Hyper Speed (300% Speed)</option>
+                              <option value="Super Fast (400% Speed)">Super Fast (400% Speed)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Directorial Guidelines */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
+                          <div className="p-3 rounded bg-[#050508]/50 border border-white/[0.03] flex flex-col gap-1.5">
+                            <div className="flex items-center gap-1.5 text-[9px] font-mono text-gray-400 font-bold tracking-wide uppercase">
                               <Eye className="w-3.5 h-3.5 text-brand-cyan shrink-0" />
-                              <span>VISUAL LANES</span>
+                              <span>VISUAL LANES GUIDELINES</span>
                             </div>
-                            <p className="text-[11px] text-gray-300 leading-normal">
-                              {block.visualCue}
-                            </p>
+                            <textarea
+                              rows={2}
+                              value={block.visualCue || ''}
+                              onChange={(e) => handleVisualCueChange(index, e.target.value)}
+                              className="w-full bg-transparent border-0 resize-none text-[11px] text-gray-300 leading-normal p-0 focus:ring-0 focus:outline-none font-sans"
+                            />
                           </div>
 
-                          <div className="p-2.5 rounded bg-space-black/50 border border-white/[0.03] flex flex-col gap-1">
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-gray-400 font-bold tracking-wide uppercase">
+                          <div className="p-3 rounded bg-[#050508]/50 border border-white/[0.03] flex flex-col gap-1.5">
+                            <div className="flex items-center gap-1.5 text-[9px] font-mono text-gray-400 font-bold tracking-wide uppercase">
                               <Volume2 className="w-3.5 h-3.5 text-brand-magenta shrink-0" />
-                              <span>AUDIO WAVE</span>
+                              <span>AUDIO WAVE SYNCHRONIZATION</span>
                             </div>
-                            <p className="text-[11px] text-gray-300 leading-normal">
-                              {block.audioAction}
-                            </p>
-                          </div>
-
-                          <div className="p-2.5 rounded bg-space-black/50 border border-white/[0.03] flex flex-col gap-1">
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-gray-400 font-bold tracking-wide uppercase">
-                              <Gauge className="w-3.5 h-3.5 text-brand-amber shrink-0" />
-                              <span>SPEED RAMP</span>
-                            </div>
-                            <p className="text-[11px] text-gray-300 leading-normal font-mono">
-                              {block.speedRamp}
-                            </p>
+                            <textarea
+                              rows={2}
+                              value={block.audioAction || ''}
+                              onChange={(e) => handleAudioActionChange(index, e.target.value)}
+                              className="w-full bg-transparent border-0 resize-none text-[11px] text-gray-300 leading-normal p-0 focus:ring-0 focus:outline-none font-sans"
+                            />
                           </div>
                         </div>
                       </div>

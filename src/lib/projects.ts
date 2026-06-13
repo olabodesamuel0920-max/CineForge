@@ -250,7 +250,6 @@ export async function createProject(input: CreateProjectInput, customBlueprint?:
     return saveLocalProject(input, customBlueprint);
   }
 }
-
 export async function updateProject(project: Project): Promise<Project> {
   const user = await getActiveUser();
   if (!user) {
@@ -280,13 +279,36 @@ export async function updateProject(project: Project): Promise<Project> {
       throw new Error(projectError.message);
     }
 
+    // Update the blueprints table
+    const { error: blueprintError } = await client
+      .from('blueprints')
+      .update({
+        edit_title: project.blueprint.editTitle,
+        viewer_emotion: project.blueprint.viewerEmotion,
+        hook_strategy: project.blueprint.hookStrategy,
+        timeline_blocks: project.blueprint.timelineBlocks,
+        cut_rhythm: project.blueprint.cutRhythm,
+        speed_ramp_plan: project.blueprint.speedRampPlan,
+        vfx_direction: project.blueprint.vfxDirection,
+        caption_style: project.blueprint.captionStyle,
+        color_grade: project.blueprint.colorGrade,
+        sound_direction: project.blueprint.soundDirection,
+        max_quality_plan: project.blueprint.maxQualityPlan,
+        export_recommendation: project.blueprint.exportRecommendation
+      })
+      .eq('project_id', project.id);
+
+    if (blueprintError) {
+      console.error(`Failed to update blueprint for project ${project.id} in Supabase:`, blueprintError.message);
+      throw new Error(blueprintError.message);
+    }
+
     return project;
   } catch (e) {
     console.warn(`Supabase updateProject failed for ${project.id}, writing to localStorage instead.`, e);
     return updateLocalProject(project);
   }
 }
-
 export async function deleteProject(id: string): Promise<void> {
   const user = await getActiveUser();
   if (!user) {

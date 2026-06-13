@@ -3,8 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Project } from '@/types/project';
-import { getProjectById, getActiveUser } from '@/lib/projects';
+import { Project, TimelineBlock } from '@/types/project';
+import { getProjectById, getActiveUser, updateProject } from '@/lib/projects';
 import { getModeById } from '@/lib/cineforgeModes';
 import { getSupabase } from '@/lib/supabase';
 import CinematicPreviewPanel from '@/components/CinematicPreviewPanel';
@@ -15,7 +15,7 @@ import RenderQueuePanel from '@/components/RenderQueuePanel';
 import RightsSafetyNotice from '@/components/RightsSafetyNotice';
 import { 
   ArrowLeft, Cpu, Sparkles, Film, Eye, 
-  Volume2, Palette, FileText, ClipboardCheck, Clipboard, ExternalLink 
+  Volume2, Palette, FileText, ClipboardCheck, Clipboard, ExternalLink, CloudRain
 } from 'lucide-react';
 
 export default function ProjectDetailPage() {
@@ -29,6 +29,37 @@ export default function ProjectDetailPage() {
   const [activeVideoUrl, setActiveVideoUrl] = useState<string>('');
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [isRedirecting, setIsRedirecting] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+
+  // Debounced auto-save effect
+  useEffect(() => {
+    if (!project || saveStatus !== 'unsaved') return;
+
+    const timer = setTimeout(async () => {
+      setSaveStatus('saving');
+      try {
+        await updateProject(project);
+        setSaveStatus('saved');
+      } catch (err) {
+        console.error('Failed to auto-save blueprint changes:', err);
+        setSaveStatus('unsaved');
+      }
+    }, 1000); // 1-second debounce
+
+    return () => clearTimeout(timer);
+  }, [project, saveStatus]);
+
+  const handleTimelineChange = (newBlocks: TimelineBlock[]) => {
+    if (!project) return;
+    setProject({
+      ...project,
+      blueprint: {
+        ...project.blueprint,
+        timelineBlocks: newBlocks
+      }
+    });
+    setSaveStatus('unsaved');
+  };
 
   const handleUpgradeRedirect = async () => {
     setIsRedirecting(true);
@@ -178,12 +209,34 @@ export default function ProjectDetailPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs font-mono">
-            <span className="text-gray-500">EditDNA Compiled:</span>
-            <span className="text-brand-green font-bold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse"></span>
-              VERIFIED
-            </span>
+          <div className="flex items-center gap-4 text-xs font-mono">
+            {/* Auto-save Status Indicator */}
+            {saveStatus === 'saved' && (
+              <span className="text-emerald-400 flex items-center gap-1 text-[11px]">
+                <span className="w-1 h-1 rounded-full bg-emerald-400"></span>
+                ✓ Saved to Cloud
+              </span>
+            )}
+            {saveStatus === 'saving' && (
+              <span className="text-brand-amber flex items-center gap-1 text-[11px] animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-amber animate-pulse"></span>
+                ⚡ Saving...
+              </span>
+            )}
+            {saveStatus === 'unsaved' && (
+              <span className="text-gray-400 flex items-center gap-1 text-[11px]">
+                <span className="w-1 h-1 rounded-full bg-gray-500"></span>
+                ● Unsaved Changes
+              </span>
+            )}
+
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">EditDNA:</span>
+              <span className="text-brand-green font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse"></span>
+                VERIFIED
+              </span>
+            </div>
           </div>
         </div>
 
@@ -215,6 +268,7 @@ export default function ProjectDetailPage() {
               project={project}
               onPreviewUrl={(url) => setActiveVideoUrl(url)}
               onCreditExhausted={() => setShowUpgradeModal(true)}
+              onTimelineChange={handleTimelineChange}
             />
 
           </div>
