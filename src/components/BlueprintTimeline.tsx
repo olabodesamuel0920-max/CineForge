@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { TimelineBlock, Project } from '@/types/project';
-import { Play, Eye, Volume2, Gauge, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { Play, Eye, Volume2, Gauge, ChevronDown, ChevronUp, Loader2, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSupabase } from '@/lib/supabase';
 
@@ -18,6 +18,84 @@ interface BlueprintTimelineProps {
 export default function BlueprintTimeline({ blocks, accentColor = 'cyan', project, onPreviewUrl, onCreditExhausted, onTimelineChange }: BlueprintTimelineProps) {
   const [expandedBlock, setExpandedBlock] = useState<string | null>(blocks[0]?.id || null);
   const [previewingBlockId, setPreviewingBlockId] = useState<string | null>(null);
+  const [regeneratingBlockId, setRegeneratingBlockId] = useState<string | null>(null);
+  const [activeRegenBlockId, setActiveRegenBlockId] = useState<string | null>(null);
+  const [regenPrompt, setRegenPrompt] = useState<string>('');
+
+  const handleTriggerRegen = async (block: TimelineBlock, index: number) => {
+    if (!project || !regenPrompt.trim()) return;
+
+    const promptText = regenPrompt.trim();
+    if (promptText.length > 500) {
+      alert('Prompt must be 500 characters or less.');
+      return;
+    }
+
+    setRegeneratingBlockId(block.id);
+    setActiveRegenBlockId(null);
+    setRegenPrompt('');
+
+    try {
+      const client = getSupabase();
+      let token = '';
+      if (client) {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          token = session.access_token;
+        }
+      }
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch('/api/blueprint/regenerate-block', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          projectId: project.id,
+          blockId: block.id,
+          blockPrompt: promptText,
+          currentBlock: block,
+          selectedMode: project.selectedMode,
+          platform: project.platform,
+          duration: project.duration
+        })
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Regeneration failed: status ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success && data.block) {
+        const newBlocks = [...blocks];
+        newBlocks[index] = {
+          ...newBlocks[index],
+          title: data.block.title || newBlocks[index].title,
+          description: data.block.description || newBlocks[index].description,
+          caption: data.block.caption !== undefined ? data.block.caption : newBlocks[index].caption,
+          visualCue: data.block.visualCue || newBlocks[index].visualCue,
+          audioAction: data.block.audioAction || newBlocks[index].audioAction,
+          speedRamp: data.block.speedRamp || newBlocks[index].speedRamp
+        };
+        if (onTimelineChange) {
+          onTimelineChange(newBlocks);
+        }
+      } else {
+        throw new Error(data.error || 'Failed to regenerate block creative fields.');
+      }
+    } catch (err) {
+      console.error('AI regeneration failed:', err);
+      alert((err as Error).message || 'Failed to regenerate block.');
+    } finally {
+      setRegeneratingBlockId(null);
+    }
+  };
 
   const handlePreviewClick = async (block: TimelineBlock) => {
     if (!project || !onPreviewUrl) return;
@@ -31,7 +109,7 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan', projec
     }
 
     const previewStart = start;
-    const previewDuration = Math.min(2.0, end - start);
+    const previewDuration = end - start;
 
     setPreviewingBlockId(block.id);
 
@@ -280,9 +358,83 @@ export default function BlueprintTimeline({ blocks, accentColor = 'cyan', projec
                       className="overflow-hidden"
                     >
                       <div className="p-4 pt-0 border-t border-white/5 flex flex-col gap-4">
-                        <p className="text-[11px] text-gray-400 leading-normal font-sans pt-3 italic">
-                          {block.description}
-                        </p>
+                        <div className="flex items-start justify-between gap-4 pt-3">
+                          <p className="text-[11px] text-gray-400 leading-normal font-sans italic flex-1">
+                            {block.description}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveRegenBlockId(activeRegenBlockId === block.id ? null : block.id);
+                              setRegenPrompt('');
+                            }}
+                            disabled={regeneratingBlockId !== null}
+                            className="shrink-0 text-[10px] font-mono font-bold text-brand-violet hover:text-brand-magenta border border-brand-violet/30 hover:border-brand-magenta/50 px-2.5 py-1 rounded bg-brand-violet/5 hover:bg-brand-magenta/5 transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            {regeneratingBlockId === block.id ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin text-brand-magenta" />
+                                <span>REGENERATING...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3 h-3 text-brand-violet" />
+                                <span>AI REGENERATE</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+
+                        {/* Inline AI Regenerate Prompt Box */}
+                        <AnimatePresence>
+                          {activeRegenBlockId === block.id && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.15 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="p-3 rounded-lg bg-[#0c0b18]/65 border border-brand-violet/20 flex flex-col gap-2.5 mt-1 mb-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[9px] font-mono text-brand-violet font-bold uppercase tracking-wider flex items-center gap-1">
+                                    <Sparkles className="w-3.5 h-3.5 text-brand-violet animate-pulse" />
+                                    AI Segment Director Prompt
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveRegenBlockId(null)}
+                                    className="text-[10px] font-mono text-gray-500 hover:text-gray-300"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    value={regenPrompt}
+                                    onChange={(e) => setRegenPrompt(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        handleTriggerRegen(block, index);
+                                      }
+                                    }}
+                                    placeholder="e.g. make this more dramatic with wheel close-up and neon energy"
+                                    className="flex-1 bg-[#050508]/85 border border-white/10 rounded px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-brand-violet/60 font-sans"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTriggerRegen(block, index)}
+                                    disabled={!regenPrompt.trim() || regeneratingBlockId !== null}
+                                    className="px-3.5 py-1.5 rounded bg-brand-violet text-space-black font-extrabold text-[10px] uppercase tracking-wider hover:bg-brand-magenta hover:text-white transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                                  >
+                                    Regen
+                                  </button>
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
 
                         {/* Interactive Editor Controls */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
