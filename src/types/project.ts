@@ -76,3 +76,27 @@ export interface CineForgeMode {
   viewerEmotion: string;
   glowColor: string; // Tailored color theme e.g., 'cyan', 'magenta', 'amber', etc.
 }
+
+export interface ProjectVersion {
+  id: string;
+  projectId: string;
+  versionNumber: number;
+  blueprint: EditDNABlueprint;
+  outputPath: string;
+  diagnostics?: any;
+  createdAt: string;
+}
+
+export interface BrandPreset {
+  id: string;
+  userId?: string;
+  name: string;
+  tone?: string;
+  colorMood?: string;
+  captionStyle?: string;
+  ctaStyle?: string;
+  platformPreference?: string;
+  motionStyle?: string;
+  soundDesignStyle?: string;
+  createdAt: string;
+}

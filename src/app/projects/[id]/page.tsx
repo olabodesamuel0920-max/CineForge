@@ -4,7 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Project, TimelineBlock } from '@/types/project';
-import { getProjectById, getActiveUser, updateProject } from '@/lib/projects';
+import { getProjectById, getActiveUser, updateProject, getProjectVersions, getBrandPresets, createBrandPreset, deleteBrandPreset } from '@/lib/projects';
+import { ProjectVersion, BrandPreset } from '@/types/project';
 import { getModeById } from '@/lib/cineforgeModes';
 import { getSupabase } from '@/lib/supabase';
 import CinematicPreviewPanel from '@/components/CinematicPreviewPanel';
@@ -15,7 +16,8 @@ import RenderQueuePanel from '@/components/RenderQueuePanel';
 import RightsSafetyNotice from '@/components/RightsSafetyNotice';
 import { 
   ArrowLeft, Cpu, Sparkles, Film, Eye, 
-  Volume2, Palette, FileText, ClipboardCheck, Clipboard, ExternalLink, CloudRain
+  Volume2, Palette, FileText, ClipboardCheck, Clipboard, ExternalLink, CloudRain,
+  History, Trash2, Save, PlayCircle, Undo, Loader2
 } from 'lucide-react';
 
 export default function ProjectDetailPage() {
@@ -30,6 +32,149 @@ export default function ProjectDetailPage() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  const [versions, setVersions] = useState<ProjectVersion[]>([]);
+  const [brandPresets, setBrandPresets] = useState<BrandPreset[]>([]);
+  const [showSavePreset, setShowSavePreset] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [isSignLoading, setIsSignLoading] = useState<string | null>(null);
+
+  const loadVersionsAndPresets = async () => {
+    if (!id) return;
+    try {
+      const vers = await getProjectVersions(id);
+      setVersions(vers);
+      const prs = await getBrandPresets();
+      setBrandPresets(prs);
+    } catch (err) {
+      console.error('Failed to load versions/presets:', err);
+    }
+  };
+
+  // Load versions and presets on load
+  useEffect(() => {
+    if (id) {
+      loadVersionsAndPresets();
+    }
+  }, [id, project?.status?.renderEngine]); // Reload when project is fetched or render status completes!
+
+  const handlePlayVersion = async (version: ProjectVersion) => {
+    setIsSignLoading(version.id);
+    try {
+      const client = getSupabase();
+      let token = '';
+      if (client) {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          token = session.access_token;
+        }
+      }
+
+      if (!token) {
+        setActiveVideoUrl(version.outputPath.startsWith('/') ? version.outputPath : `/${version.outputPath}`);
+        return;
+      }
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      };
+
+      const response = await fetch('/api/projects/sign-url', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          projectId: id,
+          versionId: version.id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch presigned playback URL.');
+      }
+
+      const data = await response.json();
+      if (data.url) {
+        setActiveVideoUrl(data.url);
+      } else {
+        throw new Error('Playback URL signing failed.');
+      }
+    } catch (err) {
+      console.error('Failed to sign version URL:', err);
+      setActiveVideoUrl(version.outputPath.startsWith('/') ? version.outputPath : `/${version.outputPath}`);
+    } finally {
+      setIsSignLoading(null);
+    }
+  };
+
+  const handleRestoreVersion = async (version: ProjectVersion) => {
+    if (!project) return;
+    if (!confirm(`Are you sure you want to restore Version ${version.versionNumber}? This will replace your current timeline layout.`)) return;
+
+    const restoredProject: Project = {
+      ...project,
+      blueprint: version.blueprint
+    };
+
+    setProject(restoredProject);
+    setSaveStatus('unsaved');
+  };
+
+  const handleSaveBrandPreset = async () => {
+    if (!project || !presetName.trim()) return;
+    try {
+      const newPreset = await createBrandPreset({
+        name: presetName.trim(),
+        tone: project.blueprint.viewerEmotion,
+        colorMood: project.blueprint.colorGrade,
+        captionStyle: project.blueprint.captionStyle,
+        ctaStyle: project.blueprint.exportRecommendation,
+        platformPreference: project.platform,
+        motionStyle: project.blueprint.cutRhythm,
+        soundDesignStyle: project.blueprint.soundDirection
+      });
+      setBrandPresets([newPreset, ...brandPresets]);
+      setPresetName('');
+      setShowSavePreset(false);
+    } catch (err) {
+      console.error('Failed to save brand preset:', err);
+      alert('Failed to save brand preset.');
+    }
+  };
+
+  const handleApplyPreset = async (preset: BrandPreset) => {
+    if (!project) return;
+    
+    const updatedBlueprint = {
+      ...project.blueprint,
+      viewerEmotion: preset.tone || project.blueprint.viewerEmotion,
+      colorGrade: preset.colorMood || project.blueprint.colorGrade,
+      captionStyle: preset.captionStyle || project.blueprint.captionStyle,
+      soundDirection: preset.soundDesignStyle || project.blueprint.soundDirection,
+      cutRhythm: preset.motionStyle || project.blueprint.cutRhythm,
+      exportRecommendation: preset.ctaStyle || project.blueprint.exportRecommendation
+    };
+
+    const updatedProject: Project = {
+      ...project,
+      platform: (preset.platformPreference as any) || project.platform,
+      blueprint: updatedBlueprint
+    };
+
+    setProject(updatedProject);
+    setSaveStatus('unsaved');
+  };
+
+  const handleDeletePreset = async (presetId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this brand style preset?')) return;
+    try {
+      await deleteBrandPreset(presetId);
+      setBrandPresets(brandPresets.filter(p => p.id !== presetId));
+    } catch (err) {
+      console.error('Failed to delete brand preset:', err);
+      alert('Failed to delete preset.');
+    }
+  };
 
   // Debounced auto-save effect
   useEffect(() => {
@@ -287,6 +432,151 @@ export default function ProjectDetailPage() {
               }}
               onCreditExhausted={() => setShowUpgradeModal(true)}
             />
+
+            {/* Version History Collapsible Panel */}
+            <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/40 flex flex-col gap-3">
+              <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                <h3 className="text-xs font-mono font-bold tracking-widest text-gray-400 flex items-center gap-1.5">
+                  <History className="w-4 h-4 text-brand-cyan" /> RENDER VERSION HISTORY
+                </h3>
+                <span className="text-[10px] font-mono text-gray-500">
+                  {versions.length} SAVED
+                </span>
+              </div>
+
+              {versions.length === 0 ? (
+                <p className="text-[10px] font-mono text-gray-500 italic py-1">
+                  No rendered versions logged. Dispatch a full render job to auto-save a version state.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2 max-h-[200px] overflow-y-auto pr-1">
+                  {versions.map((ver) => {
+                    return (
+                      <div key={ver.id} className="p-2.5 rounded bg-white/[0.02] border border-white/5 flex flex-col gap-1.5 hover:bg-white/[0.04] transition-all">
+                        <div className="flex items-center justify-between text-[11px] font-mono">
+                          <span className="text-brand-cyan font-bold">V{ver.versionNumber} Snapshot</span>
+                          <span className="text-gray-500 text-[10px]">
+                            {new Date(ver.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+
+                        {/* Diagnostics summary if present */}
+                        {ver.diagnostics && (
+                          <div className="text-[9px] font-mono text-gray-500 flex justify-between">
+                            <span>{ver.diagnostics.videoDuration ? `${ver.diagnostics.videoDuration.toFixed(1)}s` : '15s'} | {ver.diagnostics.outputSize ? `${(ver.diagnostics.outputSize / 1024 / 1024).toFixed(2)} MB` : 'N/A'}</span>
+                            <span className="uppercase">{ver.diagnostics.codec || 'H.264'}</span>
+                          </div>
+                        )}
+
+                        <div className="flex gap-2 mt-0.5">
+                          <button
+                            onClick={() => handlePlayVersion(ver)}
+                            disabled={isSignLoading === ver.id}
+                            className="flex-1 py-1 rounded bg-brand-cyan/15 hover:bg-brand-cyan/25 text-brand-cyan font-bold font-mono text-[9px] uppercase tracking-wider transition-colors flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                          >
+                            {isSignLoading === ver.id ? (
+                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            ) : (
+                              <PlayCircle className="w-3.5 h-3.5" />
+                            )}
+                            <span>Play version</span>
+                          </button>
+                          <button
+                            onClick={() => handleRestoreVersion(ver)}
+                            className="flex-1 py-1 rounded bg-white/5 hover:bg-white/10 text-gray-300 font-bold font-mono text-[9px] uppercase tracking-wider transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            <Undo className="w-3.5 h-3.5" />
+                            <span>Restore blueprint</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Brand Presets Collapsible Panel */}
+            <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/40 flex flex-col gap-3">
+              <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                <h3 className="text-xs font-mono font-bold tracking-widest text-gray-400 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-brand-violet" /> BRAND STYLE MEMORY
+                </h3>
+                <span className="text-[10px] font-mono text-gray-500">
+                  {brandPresets.length} PRESETS
+                </span>
+              </div>
+
+              {/* Save Style Control */}
+              {!showSavePreset ? (
+                <button
+                  onClick={() => setShowSavePreset(true)}
+                  className="w-full py-1.5 rounded border border-brand-violet/30 bg-brand-violet/5 hover:bg-brand-violet/10 text-brand-violet font-bold font-mono text-[10px] uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1"
+                >
+                  <Save className="w-3.5 h-3.5" /> Save Current Style as Preset
+                </button>
+              ) : (
+                <div className="p-2.5 rounded bg-brand-violet/5 border border-brand-violet/20 flex flex-col gap-2">
+                  <span className="text-[9px] font-mono text-brand-violet font-bold uppercase tracking-wider">Preset Name</span>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={presetName}
+                      onChange={(e) => setPresetName(e.target.value)}
+                      placeholder="e.g. Neon Luxury Vibe"
+                      className="flex-1 bg-[#050508]/85 border border-white/10 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-brand-violet/60 font-sans"
+                    />
+                    <button
+                      onClick={handleSaveBrandPreset}
+                      disabled={!presetName.trim()}
+                      className="px-2.5 py-1 rounded bg-brand-violet text-space-black font-mono font-bold text-[10px] uppercase hover:bg-brand-magenta hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowSavePreset(false);
+                        setPresetName('');
+                      }}
+                      className="text-[10px] font-mono text-gray-500 hover:text-gray-300"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {brandPresets.length === 0 ? (
+                <p className="text-[10px] font-mono text-gray-500 italic py-1">
+                  No saved presets. Save your current styling to reuse across timelines.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1.5 max-h-[180px] overflow-y-auto pr-1">
+                  {brandPresets.map((preset) => (
+                    <div
+                      key={preset.id}
+                      onClick={() => handleApplyPreset(preset)}
+                      className="p-2 rounded bg-white/[0.01] hover:bg-white/[0.03] border border-white/5 hover:border-brand-violet/20 transition-all flex items-center justify-between group cursor-pointer text-xs"
+                      title="Click to apply style preset properties to timeline"
+                    >
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-gray-200 font-semibold text-[11px] font-sans">{preset.name}</span>
+                        <span className="text-[9px] font-mono text-gray-500 uppercase">
+                          {preset.colorMood || 'No Mood'} | {preset.tone || 'Neutral'} | {preset.platformPreference || 'All'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => handleDeletePreset(preset.id, e)}
+                        className="text-gray-600 hover:text-brand-magenta transition-colors opacity-0 group-hover:opacity-100 p-1 cursor-pointer"
+                        title="Delete Preset"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Full Spec sheet copy cards */}
             <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/40 flex flex-col gap-4">

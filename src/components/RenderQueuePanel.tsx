@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, Cpu, Share2, Loader2, Download, CheckCircle, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Project } from '@/types/project';
-import { updateProject } from '@/lib/projects';
+import { updateProject, createProjectVersion } from '@/lib/projects';
 import { getSupabase } from '@/lib/supabase';
 
 interface RenderQueuePanelProps {
@@ -24,6 +24,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
   const [queuePosition, setQueuePosition] = useState<number | null>(null);
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const hasLoggedVersionRef = useRef<boolean>(false);
 
   // Sync state from project on mount or project changes
   useEffect(() => {
@@ -93,6 +94,22 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
           setOutputUrl(data.outputUrl || `/renders/output-${project.id}.mp4`);
           setDiagnostics(data.diagnostics || null);
           stopPolling();
+
+          if (!hasLoggedVersionRef.current) {
+            hasLoggedVersionRef.current = true;
+            const isCloud = process.env.NEXT_PUBLIC_RENDER_MODE === 'cloud' || (data.outputUrl && data.outputUrl.includes('storage.googleapis.com'));
+            const outputPath = isCloud 
+              ? `rendered/output-${project.id}.mp4`
+              : `renders/output-${project.id}.mp4`;
+
+            createProjectVersion(project.id, {
+              blueprint: project.blueprint,
+              outputPath,
+              diagnostics: data.diagnostics
+            }).catch(err => {
+              console.error('Failed to log project render version:', err);
+            });
+          }
           
           // Trigger dynamic parent page path switch: raw asset -> output-rendered file
           updateParentProject('Active');
@@ -163,6 +180,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
     setEstTime(15);
     setErrorMsg(null);
     updateParentProject('Preparing');
+    hasLoggedVersionRef.current = false;
 
     try {
       const client = getSupabase();
