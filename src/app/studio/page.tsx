@@ -11,75 +11,8 @@ import EditModeCard from '@/components/EditModeCard';
 import RightsSafetyNotice from '@/components/RightsSafetyNotice';
 import { Sparkles, Clapperboard, FolderGit2, AlertCircle, Loader2 } from 'lucide-react';
 
-// Style presets for CineForge Studio
-export const STYLE_PRESETS = [
-  {
-    id: 'bmw-commercial',
-    name: 'BMW Commercial',
-    mode: 'luxury-demon-reveal',
-    prompt: 'High-contrast commercial style edit. Dramatic shadow-rich lighting, reflections tracing curves of a sleek black vehicle, industrial hits syncing with rapid speed ramping transitions.',
-    duration: '15s',
-    platform: 'YouTube',
-    maxQualityMode: true,
-    estimatedRenderTime: '45-90s',
-    description: 'Ultra UHD cinematic vehicle showcase with gold/teal grading.'
-  },
-  {
-    id: 'luxury-fashion',
-    name: 'Luxury Fashion',
-    mode: 'fashion-drop-impact',
-    prompt: 'Minimalist fashion runway showcase. Warm desaturated tones, low warm saturation, jump cuts on garage beats, portrait frame centered, editorial typeface overlay.',
-    duration: '15s',
-    platform: 'Reels',
-    maxQualityMode: true,
-    estimatedRenderTime: '45-90s',
-    description: 'Clean jump-cuts and low-saturated editorial grading.'
-  },
-  {
-    id: 'product-reveal',
-    name: 'Product Reveal',
-    mode: 'product-awakening',
-    prompt: 'Macro close-up sweeps of a futuristic device. Sleek UI element lines pointing to key features, electrical sparks, tech beep sounds, mechanical clicking sync.',
-    duration: '10s',
-    platform: 'Shorts',
-    maxQualityMode: true,
-    estimatedRenderTime: '30-60s',
-    description: 'Extreme macro close-ups, wireframes, and tech risers.'
-  },
-  {
-    id: 'real-estate-showcase',
-    name: 'Real Estate Showcase',
-    mode: 'cinematic-brand-trailer',
-    prompt: 'Premium real estate walk-through. Warm cinematic orange-and-teal grading, soft orchestral strings, elegant slow panning.',
-    duration: '30s',
-    platform: 'YouTube',
-    maxQualityMode: true,
-    estimatedRenderTime: '90-180s',
-    description: 'Smooth gimbal pans, ambient piano, and warm sunlight.'
-  },
-  {
-    id: 'travel-reel',
-    name: 'Travel Reel',
-    mode: 'street-pulse-edit',
-    prompt: 'Fast-paced travel collage. Gritty film grain, hand-held camera movement, retro exposure flashes, hip-hop boom-bap cuts.',
-    duration: '15s',
-    platform: 'TikTok',
-    maxQualityMode: false,
-    estimatedRenderTime: '30-60s',
-    description: 'Handheld camera shakes, tape glitches, and gritty grain.'
-  },
-  {
-    id: 'viral-reel',
-    name: 'Viral Reel',
-    mode: 'boss-entrance',
-    prompt: 'Distorted bass cowboy phonk intro. High-contrast neon glows, dramatic freeze frame on key action moment with glowing text overlays.',
-    duration: '5s',
-    platform: 'Reels',
-    maxQualityMode: false,
-    estimatedRenderTime: '15-30s',
-    description: 'Distorted Cowbells, neon caption outlines, freeze-frames.'
-  }
-];
+import { STYLE_PRESETS, StylePreset } from '@/lib/presetsRegistry';
+
 
 export default function StudioPage() {
   const router = useRouter();
@@ -96,6 +29,7 @@ export default function StudioPage() {
   const [videoDuration, setVideoDuration] = useState<number | undefined>(undefined);
   const [sourceType, setSourceType] = useState<'upload' | 'demo'>('upload');
   const [sourceUrl, setSourceUrl] = useState<string | undefined>(undefined);
+  const [selectedNiche, setSelectedNiche] = useState<string>('all');
   
   // Validation error state
   const [error, setError] = useState<string | null>(null);
@@ -103,7 +37,7 @@ export default function StudioPage() {
   const [tickerText, setTickerText] = useState('CONNECTING TO OUTBOUND NEURAL MODEL...');
 
   // Preset Applier logic
-  const applyPreset = (preset: typeof STYLE_PRESETS[0]) => {
+  const applyPreset = (preset: StylePreset) => {
     setTitle(`${preset.name} - Demo`);
     setPrompt(preset.prompt);
     setSelectedMode(preset.mode);
@@ -346,8 +280,37 @@ export default function StudioPage() {
               ONE-CLICK STYLE PRESETS (AUTO-LOAD & STAGE DEMO)
             </h3>
           </div>
+
+          {/* Niche Tabs */}
+          <div className="flex flex-wrap gap-1.5 border-b border-white/5 pb-3">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'cars', label: 'Cars' },
+              { id: 'food', label: 'Food' },
+              { id: 'fashion', label: 'Fashion' },
+              { id: 'salons', label: 'Salons' },
+              { id: 'real estate', label: 'Real Estate' },
+              { id: 'football/sports', label: 'Sports' },
+              { id: 'products', label: 'Products' },
+              { id: 'talking-head content', label: 'Talking Head' }
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setSelectedNiche(tab.id)}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider transition-all cursor-pointer ${
+                  selectedNiche === tab.id
+                    ? 'bg-brand-cyan text-space-black font-extrabold shadow-[0_0_10px_rgba(0,243,255,0.25)]'
+                    : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {STYLE_PRESETS.map((preset) => {
+            {STYLE_PRESETS.filter(p => selectedNiche === 'all' || p.niche === selectedNiche).map((preset) => {
               const isSelected = selectedMode === preset.mode && title.startsWith(preset.name);
               return (
                 <button

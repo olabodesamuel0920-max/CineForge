@@ -91,75 +91,9 @@ const SLIDES = [
   }
 ];
 
-// Presets data matching examples page
-const DEMO_PRESETS = [
-  {
-    id: 'bmw-commercial',
-    name: 'BMW Commercial',
-    mode: 'luxury-demon-reveal',
-    prompt: 'High-contrast commercial style edit. Dramatic shadow-rich lighting, reflections tracing curves of a sleek black vehicle, industrial hits syncing with rapid speed ramping transitions.',
-    duration: '15s',
-    platform: 'YouTube',
-    maxQualityMode: true,
-    estimatedRenderTime: '18.7s',
-    tagline: 'Automotive Edition'
-  },
-  {
-    id: 'luxury-fashion',
-    name: 'Luxury Fashion',
-    mode: 'fashion-drop-impact',
-    prompt: 'Minimalist fashion runway showcase. Warm desaturated tones, low warm saturation, jump cuts on garage beats, portrait frame centered, editorial typeface overlay.',
-    duration: '15s',
-    platform: 'Reels',
-    maxQualityMode: true,
-    estimatedRenderTime: '22.1s',
-    tagline: 'Editorial Runway'
-  },
-  {
-    id: 'product-reveal',
-    name: 'Product Reveal',
-    mode: 'product-awakening',
-    prompt: 'Macro close-up sweeps of a futuristic device. Sleek UI element lines pointing to key features, electrical sparks, tech beep sounds, mechanical clicking sync.',
-    duration: '10s',
-    platform: 'Shorts',
-    maxQualityMode: true,
-    estimatedRenderTime: '12.5s',
-    tagline: 'Consumer Electronics'
-  },
-  {
-    id: 'real-estate-showcase',
-    name: 'Real Estate Showcase',
-    mode: 'cinematic-brand-trailer',
-    prompt: 'Premium real estate walk-through. Warm cinematic orange-and-teal grading, soft orchestral strings, elegant slow panning.',
-    duration: '30s',
-    platform: 'YouTube',
-    maxQualityMode: true,
-    estimatedRenderTime: '35.4s',
-    tagline: 'Cinematic Tour'
-  },
-  {
-    id: 'travel-reel',
-    name: 'Travel Reel',
-    mode: 'street-pulse-edit',
-    prompt: 'Fast-paced travel collage. Gritty film grain, hand-held camera movement, retro exposure flashes, hip-hop boom-bap cuts.',
-    duration: '15s',
-    platform: 'TikTok',
-    maxQualityMode: false,
-    estimatedRenderTime: '14.8s',
-    tagline: 'Adventure Vlog'
-  },
-  {
-    id: 'viral-reel',
-    name: 'Viral Reel',
-    mode: 'boss-entrance',
-    prompt: 'Distorted cowboy phonk intro. High-contrast neon glows, dramatic freeze frame on key action moment with glowing text overlays.',
-    duration: '5s',
-    platform: 'Reels',
-    maxQualityMode: false,
-    estimatedRenderTime: '8.2s',
-    tagline: 'Social Phonk'
-  }
-];
+import { STYLE_PRESETS } from '@/lib/presetsRegistry';
+
+const DEMO_PRESETS = STYLE_PRESETS;
 
 function DemoContent() {
   const router = useRouter();
