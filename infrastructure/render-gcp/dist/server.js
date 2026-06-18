@@ -49,8 +49,9 @@ const queue_1 = require("./queue");
 if (process.env.RENDER_MODE !== 'cloud') {
     process.env.RENDER_MODE = 'local';
 }
-// Global flag to track Quick Sync Video (QSV) hardware acceleration support
-let isQsvSupported = false;
+// Global flags to track Quick Sync Video (QSV) hardware acceleration support
+let isH264QsvSupported = false;
+let isHevcQsvSupported = false;
 const app = (0, express_1.default)();
 app.use(express_1.default.json());
 const PORT = process.env.PORT || 8080;
@@ -298,6 +299,7 @@ function hashString(str) {
 async function runFfmpegWithProgress(args, totalDuration, job) {
     return new Promise((resolve, reject) => {
         const ffmpegCmd = getFfmpegCommand();
+        console.log('[FFmpeg Command]', ffmpegCmd, args.map(arg => arg.includes(' ') || arg.includes(';') ? `"${arg}"` : arg).join(' '));
         const ffmpegProcess = (0, child_process_1.spawn)(ffmpegCmd, args);
         job.process = ffmpegProcess;
         let errorLog = '';
@@ -613,8 +615,17 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
         }
         const requestedFps = payload.blueprint.export?.fps || 60;
         const fps = Math.min(requestedFps, Math.ceil(videoMetadata.fps));
-        let codec = payload.blueprint.export?.codec === 'hevc' ? 'libx265' : 'libx264';
-        ffmpegArgs.push('-c:v', codec, '-preset', 'veryfast', '-r', fps.toString(), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
+        let codec = 'libx264';
+        let bitrateArgs = [];
+        if (payload.blueprint.export?.codec === 'hevc') {
+            codec = isHevcQsvSupported ? 'hevc_qsv' : 'libx265';
+            bitrateArgs = ['-b:v', '5M', '-maxrate', '7M', '-bufsize', '10M'];
+        }
+        else {
+            codec = isH264QsvSupported ? 'h264_qsv' : 'libx264';
+            bitrateArgs = ['-b:v', '7M', '-maxrate', '9M', '-bufsize', '14M'];
+        }
+        ffmpegArgs.push('-c:v', codec, ...bitrateArgs, '-preset', 'veryfast', '-r', fps.toString(), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
         if (outputHasAudio) {
             ffmpegArgs.push('-c:a', 'aac', '-b:a', '192k');
         }
@@ -646,7 +657,10 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
             uploadDuration,
             totalDuration: totalJobDuration,
             outputSize,
-            workerNode: `${require('os').hostname()}:${process.pid}`
+            workerNode: `${require('os').hostname()}:${process.pid}`,
+            videoDuration: totalDuration,
+            resolution: payload.blueprint.export?.resolution || [1080, 1920],
+            codec: codec
         };
         console.log(`[Queue] Render Job ${job.jobId} completed successfully in ${totalJobDuration.toFixed(1)}s.`);
         await queue_1.renderQueueManager.notifyProgress(job, 100, 'COMPLETED');
@@ -950,8 +964,24 @@ queue_1.renderQueueManager.executePreviewRunner = async (job) => {
         job.activeFiles = [];
     }
 };
+// --- Security Hardening Middleware & Public Health Check ---
+const RENDER_WORKER_SECRET = process.env.RENDER_WORKER_SECRET;
+const authMiddleware = (req, res, next) => {
+    if (RENDER_WORKER_SECRET) {
+        const reqSecret = req.headers['x-cineforge-worker-secret'];
+        if (reqSecret !== RENDER_WORKER_SECRET) {
+            console.warn(`[Security] Unauthorized access attempt to ${req.path} from IP ${req.ip}`);
+            return res.status(401).json({ error: 'Unauthorized: Missing or invalid x-cineforge-worker-secret header.' });
+        }
+    }
+    next();
+};
+// Harmless public health check endpoint
+app.get('/', (req, res) => {
+    res.status(200).json({ status: 'OK', message: 'CineForge GCP Render Node is active and healthy.' });
+});
 // HTTP POST /render route handler - Queue Enqueueing Flow
-app.post('/render', async (req, res) => {
+app.post('/render', authMiddleware, async (req, res) => {
     const taskId = req.body.taskId || `task-${Math.random().toString(36).substring(2, 11)}`;
     console.log(`[TaskId: ${taskId}] Ingestion request for master render.`);
     // 1. Validate Request Payload
@@ -969,7 +999,7 @@ app.post('/render', async (req, res) => {
     });
 });
 // HTTP POST /render/preview route handler - Awaiting Queue Execution Flow
-app.post('/render/preview', async (req, res) => {
+app.post('/render/preview', authMiddleware, async (req, res) => {
     const taskId = req.body.taskId || `preview-${Math.random().toString(36).substring(2, 11)}`;
     console.log(`[TaskId: ${taskId}] Ingestion request for timeline seek preview.`);
     // 1. Validate Request Payload
@@ -995,17 +1025,17 @@ app.post('/render/preview', async (req, res) => {
     }
 });
 // HTTP GET /queue/stats route handler
-app.get('/queue/stats', (req, res) => {
+app.get('/queue/stats', authMiddleware, (req, res) => {
     return res.status(200).json(queue_1.renderQueueManager.getStats());
 });
 // HTTP POST /cleanup route handler (for manual trigger and stress testing)
-app.post('/cleanup', (req, res) => {
+app.post('/cleanup', authMiddleware, (req, res) => {
     console.log('[Cleanup] Manual trigger received.');
     cleanupExpiredAssets();
     return res.status(200).json({ status: 'SUCCESS' });
 });
 // HTTP POST /cancel/:id route handler
-app.post('/cancel/:id', (req, res) => {
+app.post('/cancel/:id', authMiddleware, (req, res) => {
     const { id } = req.params;
     console.log(`[Cancel Request] Ingestion cancellation check for: ${id}`);
     let success = queue_1.renderQueueManager.cancelJob(id);
@@ -1022,7 +1052,7 @@ app.post('/cancel/:id', (req, res) => {
     return res.status(404).json({ error: `Job or project task ${id} not found, or is not in an active/queued execution state.` });
 });
 // HTTP GET /status/:taskId route handler
-app.get('/status/:taskId', async (req, res) => {
+app.get('/status/:taskId', authMiddleware, async (req, res) => {
     const { taskId } = req.params;
     if (!taskId) {
         return res.status(400).json({ error: 'Missing taskId parameter' });
@@ -1034,7 +1064,7 @@ app.get('/status/:taskId', async (req, res) => {
     return res.status(200).json(progress);
 });
 // HTTP GET /analyze-audio route handler
-app.get('/analyze-audio', async (req, res) => {
+app.get('/analyze-audio', authMiddleware, async (req, res) => {
     const { track } = req.query;
     if (!track || typeof track !== 'string') {
         return res.status(400).json({ error: 'Missing track query parameter' });
@@ -1067,6 +1097,125 @@ app.get('/analyze-audio', async (req, res) => {
         return res.status(200).json({ bpm: 120, beatInterval: 0.50, transients: [] });
     }
 });
+// HTTP POST /autodirector/inspect route handler
+app.post('/autodirector/inspect', authMiddleware, async (req, res) => {
+    const { projectId, assetPath, selectedNiche, selectedPreset, maxAnalyzeSeconds } = req.body;
+    if (!projectId || !assetPath) {
+        return res.status(400).json({ error: 'Missing projectId or assetPath parameters.' });
+    }
+    const limitSeconds = maxAnalyzeSeconds || 60;
+    const niche = selectedNiche || 'cars';
+    // Create unique temp directories
+    const tempDir = path.join(__dirname, 'tmp', `inspect-${projectId}-${Date.now()}`);
+    const localInputPath = path.join(tempDir, `input-${projectId}.mp4`);
+    try {
+        fs.mkdirSync(tempDir, { recursive: true });
+        // 1. Download/access the raw clip
+        console.log(`[AutoDirector Worker] Accessing/downloading source video: ${assetPath}`);
+        await (0, gcs_1.downloadFromGcs)(assetPath, localInputPath);
+        if (!fs.existsSync(localInputPath)) {
+            throw new Error(`Failed to access input file at: ${localInputPath}`);
+        }
+        // 2. Run ffprobe analysis
+        console.log(`[AutoDirector Worker] Running ffprobe inspection on: ${localInputPath}`);
+        const ffprobeCmd = getFfprobeCommand();
+        const ffprobeOutput = (0, child_process_1.execSync)(`"${ffprobeCmd}" -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,duration -show_entries format=duration -of json=c=1 "${localInputPath}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const metadata = JSON.parse(ffprobeOutput);
+        const stream = metadata.streams?.[0];
+        const duration = parseFloat(metadata.format?.duration || stream?.duration || '15');
+        const width = parseInt(stream?.width || '1920');
+        const height = parseInt(stream?.height || '1080');
+        const fpsRaw = stream?.r_frame_rate || '30/1';
+        const fpsParts = fpsRaw.split('/');
+        const fps = fpsParts.length === 2 ? parseFloat(fpsParts[0]) / parseFloat(fpsParts[1]) : 30;
+        // 3. Extract downscaled proxy frames (limit to first 60 seconds, low FPS)
+        const frameDir = path.join(tempDir, 'frames');
+        fs.mkdirSync(frameDir, { recursive: true });
+        const analyzeDur = Math.min(duration, limitSeconds);
+        const ffmpegCmd = getFfmpegCommand();
+        console.log(`[AutoDirector Worker] Extracting low-res proxy frames (limit: ${analyzeDur}s)`);
+        // Extract 1 frame every 4 seconds, downscaled to 160 width
+        (0, child_process_1.execSync)(`"${ffmpegCmd}" -y -ss 0.0 -t ${analyzeDur} -i "${localInputPath}" -vf "fps=1/4,scale=160:-2" -q:v 5 "${path.join(frameDir, 'frame_%03d.jpg')}"`, { stdio: 'ignore' });
+        // List extracted frames
+        const extractedFrames = fs.existsSync(frameDir) ? fs.readdirSync(frameDir) : [];
+        console.log(`[AutoDirector Worker] Extracted ${extractedFrames.length} proxy frames for inspection.`);
+        // 4. Compute basic shot / quality heuristics (simulated for v1)
+        const fileStats = fs.statSync(localInputPath);
+        const fileSizeMB = fileStats.size / (1024 * 1024);
+        // Dynamic composition segmentation based on conformed duration
+        const segmentsCount = 3;
+        const segmentDuration = duration / segmentsCount;
+        const compositionSequence = [];
+        const shotTypes = ['wide_establishing', 'medium_action', 'close_up'];
+        const motionTypes = ['slow_drift', 'rapid_pan', 'static'];
+        for (let i = 0; i < segmentsCount; i++) {
+            compositionSequence.push({
+                startTime: parseFloat((i * segmentDuration).toFixed(2)),
+                endTime: parseFloat(((i + 1) * segmentDuration).toFixed(2)),
+                shotType: shotTypes[i % shotTypes.length],
+                subjectDescription: `Conformed ${niche} scene block ${i + 1} (${width}x${height} at ${fps.toFixed(1)} FPS)`,
+                motionIntensity: motionTypes[i % motionTypes.length],
+                usableScore: parseFloat((8.5 + Math.random() * 1.5).toFixed(1))
+            });
+        }
+        // Determine recommended preset
+        let recommendedPreset = 'bmw-commercial';
+        if (niche.includes('food'))
+            recommendedPreset = 'food-crave';
+        else if (niche.includes('salon'))
+            recommendedPreset = 'salon-transform';
+        else if (niche.includes('real'))
+            recommendedPreset = 'real-estate-showcase';
+        else if (niche.includes('sport') || niche.includes('foot'))
+            recommendedPreset = 'sports-stadium';
+        else if (niche.includes('product'))
+            recommendedPreset = 'product-reveal';
+        else if (niche.includes('head') || niche.includes('talking'))
+            recommendedPreset = 'talking-head';
+        else if (niche.includes('fashion'))
+            recommendedPreset = 'luxury-fashion';
+        // Output formatted analysis
+        const analysis = {
+            detectedNiche: niche,
+            dominantColorPalette: ['#0d0e15', '#1a2238', '#2a4494'],
+            usableDuration: parseFloat(duration.toFixed(2)),
+            unusableClips: fileSizeMB > 150 ? [{ start: limitSeconds, end: duration, reason: 'File exceeds duration analysis budget limit' }] : [],
+            compositionSequence
+        };
+        return res.status(200).json({
+            success: true,
+            projectId,
+            assetPath,
+            recommendedPreset,
+            duration: parseFloat(duration.toFixed(2)),
+            sampleCount: extractedFrames.length,
+            qualityFlags: {
+                blurry: false,
+                shaky: false,
+                dark: false,
+                duplicate: false,
+                unusable: false
+            },
+            analysis
+        });
+    }
+    catch (err) {
+        console.error('[AutoDirector Worker] Inspection failed:', err);
+        return res.status(500).json({ error: `Inspection pipeline failed: ${err.message}` });
+    }
+    finally {
+        // Delete temp folder
+        try {
+            if (fs.existsSync(tempDir)) {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+                console.log(`[AutoDirector Worker] Cleaned up temp workspace: ${tempDir}`);
+            }
+        }
+        catch (e) {
+            console.warn('[AutoDirector Worker] Temp folder cleanup failed:', e);
+        }
+    }
+});
 // Ensure public uploads and renders directories exist in working directory on startup
 if (process.env.RENDER_MODE === 'local') {
     const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
@@ -1094,8 +1243,25 @@ if (process.env.RENDER_MODE === 'local') {
     try {
         const ffmpegCmd = getFfmpegCommand();
         const encoders = (0, child_process_1.execSync)(`"${ffmpegCmd}" -encoders`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-        isQsvSupported = encoders.includes('h264_qsv');
-        console.log(`[Startup] FFmpeg Intel QSV Hardware Acceleration support detected: ${isQsvSupported}`);
+        if (encoders.includes('h264_qsv')) {
+            try {
+                (0, child_process_1.execSync)(`"${ffmpegCmd}" -y -f lavfi -i testsrc=duration=0.03:size=160x120:rate=30 -c:v h264_qsv -f null -`, { stdio: 'ignore' });
+                isH264QsvSupported = true;
+            }
+            catch (e) {
+                console.warn('[Startup] h264_qsv encoder failed dry-run verification.');
+            }
+        }
+        if (encoders.includes('hevc_qsv')) {
+            try {
+                (0, child_process_1.execSync)(`"${ffmpegCmd}" -y -f lavfi -i testsrc=duration=0.03:size=160x120:rate=30 -c:v hevc_qsv -f null -`, { stdio: 'ignore' });
+                isHevcQsvSupported = true;
+            }
+            catch (e) {
+                console.warn('[Startup] hevc_qsv encoder failed dry-run verification.');
+            }
+        }
+        console.log(`[Startup] QSV support verification - h264_qsv: ${isH264QsvSupported}, hevc_qsv: ${isHevcQsvSupported}`);
     }
     catch (e) {
         console.warn('[Startup] Failed to check for Intel QSV support:', e);

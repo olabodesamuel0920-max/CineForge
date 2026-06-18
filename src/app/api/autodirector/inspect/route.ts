@@ -1,15 +1,21 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSupabase } from '@/lib/supabase';
-import { AutoDirectorAnalysis } from '@/types/autodirector';
+import { getRenderNodeUrl } from '@/lib/renderUrl';
 
+// Stricter request validation
 const requestSchema = z.object({
-  projectId: z.string(),
-  assetPath: z.string(),
-  selectedNiche: z.string(),
-  analysisSettings: z.record(z.string(), z.any()).optional(),
-  referenceDnaId: z.string().optional()
+  projectId: z.string().min(1, 'projectId is required'),
+  assetPath: z.string().min(1, 'assetPath is required'),
+  selectedNiche: z.string().min(1, 'selectedNiche is required'),
+  selectedPreset: z.string().min(1, 'selectedPreset is required'),
+  maxAnalyzeSeconds: z.number().int().positive().optional().default(60),
+  useGemini: z.boolean().optional().default(false),
+  analysisSettings: z.record(z.string(), z.any()).optional()
 });
+
+// Server-side in-memory cache to prevent redundant analysis calls for the same asset
+const analysisCache = new Map<string, any>();
 
 export async function POST(request: Request) {
   try {
@@ -36,9 +42,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const { projectId, assetPath, selectedNiche, referenceDnaId } = parseResult.data;
+    const { projectId, assetPath, selectedNiche, selectedPreset, maxAnalyzeSeconds } = parseResult.data;
 
-    // 3. Project ownership check (if authenticated)
+    // 3. Reject invalid/missing asset references
+    if (!assetPath.startsWith('gs://') && !assetPath.startsWith('renders/') && !assetPath.startsWith('uploads/') && !assetPath.startsWith('/uploads/') && !assetPath.startsWith('promo.mp4')) {
+      return NextResponse.json(
+        { error: `Invalid asset path format: ${assetPath}. Must be a valid GCS key or local reference.` },
+        { status: 400 }
+      );
+    }
+
+    // 4. Project ownership check (if authenticated)
     if (client && userId) {
       const { data: project, error: projectError } = await client
         .from('projects')
@@ -56,50 +70,52 @@ export async function POST(request: Request) {
       }
     }
 
-    // 4. Return G4.1 placeholder analysis response
-    // (Actual heavy visual processing like OpenCV or LLM video probe will run on the Cloud Run worker in future phases)
-    const mockAnalysis: AutoDirectorAnalysis = {
-      detectedNiche: selectedNiche,
-      dominantColorPalette: ['#1a1a2e', '#16213e', '#0f3460'],
-      usableDuration: 15.0,
-      unusableClips: [],
-      compositionSequence: [
-        {
-          startTime: 0.0,
-          endTime: 3.0,
-          shotType: 'wide_establishing',
-          subjectDescription: `Establishing showcase segment conformed to ${selectedNiche} aesthetics.`,
-          motionIntensity: 'slow_drift',
-          usableScore: 9.5
-        },
-        {
-          startTime: 3.0,
-          endTime: 8.0,
-          shotType: 'medium_action',
-          subjectDescription: `Action detail sequence showing core ${selectedNiche} subject interaction.`,
-          motionIntensity: 'rapid_pan',
-          usableScore: 8.8
-        },
-        {
-          startTime: 8.0,
-          endTime: 15.0,
-          shotType: 'close_up',
-          subjectDescription: `Macro focus shot framing highlight product and call-to-action outtro.`,
-          motionIntensity: 'static',
-          usableScore: 9.2
-        }
-      ]
-    };
+    // 5. Cache check to avoid repeated Gemini/analysis costs
+    const cacheKey = `${projectId}-${assetPath}-${selectedNiche}-${selectedPreset}-${maxAnalyzeSeconds}`;
+    if (analysisCache.has(cacheKey)) {
+      console.log(`[AutoDirector Inspect] Serving cached analysis for key: ${cacheKey}`);
+      return NextResponse.json(analysisCache.get(cacheKey));
+    }
 
-    return NextResponse.json({
-      success: true,
-      projectId,
-      assetPath,
-      referenceDnaId: referenceDnaId || null,
-      analysis: mockAnalysis
+    // 6. Forward request to Cloud Run Worker Node
+    const renderNodeUrl = getRenderNodeUrl();
+    const workerSecret = process.env.RENDER_WORKER_SECRET || 'cf_sec_8f93a2e9b1d0c4d7b5f2c3a5e8f1a23b';
+
+    console.log(`[AutoDirector Inspect] Dispatching inspection task to worker: ${renderNodeUrl}/autodirector/inspect`);
+    
+    const workerResponse = await fetch(`${renderNodeUrl}/autodirector/inspect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-cineforge-worker-secret': workerSecret
+      },
+      body: JSON.stringify({
+        projectId,
+        assetPath,
+        selectedNiche,
+        selectedPreset,
+        maxAnalyzeSeconds
+      })
     });
+
+    if (!workerResponse.ok) {
+      const errText = await workerResponse.text();
+      console.error(`[AutoDirector Inspect] Worker rejected task (${workerResponse.status}):`, errText);
+      return NextResponse.json(
+        { error: `Inspection worker failed: ${errText || 'Unknown error'}` },
+        { status: workerResponse.status }
+      );
+    }
+
+    const workerResult = await workerResponse.json();
+
+    // Cache the successful result
+    analysisCache.set(cacheKey, workerResult);
+
+    return NextResponse.json(workerResult);
+
   } catch (err) {
     console.error('[AutoDirector Inspect] Unexpected handler collapse:', err);
-    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
+    return NextResponse.json({ error: `Internal server error: ${(err as Error).message}` }, { status: 500 });
   }
 }

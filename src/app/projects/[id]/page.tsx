@@ -4,8 +4,9 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Project, TimelineBlock } from '@/types/project';
-import { getProjectById, getActiveUser, updateProject, getProjectVersions, getBrandPresets, createBrandPreset, deleteBrandPreset } from '@/lib/projects';
+import { getProjectById, getActiveUser, updateProject, getProjectVersions, getBrandPresets, createBrandPreset, deleteBrandPreset, createProjectVersion } from '@/lib/projects';
 import { ProjectVersion, BrandPreset } from '@/types/project';
+import { compileAutoDirectorAnalysis } from '@/lib/autodirectorCompiler';
 import { getModeById } from '@/lib/cineforgeModes';
 import { getSupabase } from '@/lib/supabase';
 import CinematicPreviewPanel from '@/components/CinematicPreviewPanel';
@@ -17,7 +18,7 @@ import RightsSafetyNotice from '@/components/RightsSafetyNotice';
 import { 
   ArrowLeft, Cpu, Sparkles, Film, Eye, 
   Volume2, Palette, FileText, ClipboardCheck, Clipboard, ExternalLink, CloudRain,
-  History, Trash2, Save, PlayCircle, Undo, Loader2
+  History, Trash2, Save, PlayCircle, Undo, Loader2, Wand2
 } from 'lucide-react';
 
 export default function ProjectDetailPage() {
@@ -37,6 +38,10 @@ export default function ProjectDetailPage() {
   const [showSavePreset, setShowSavePreset] = useState(false);
   const [presetName, setPresetName] = useState('');
   const [isSignLoading, setIsSignLoading] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<any | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [isInspectorExpanded, setIsInspectorExpanded] = useState(true);
 
   const loadVersionsAndPresets = async () => {
     if (!id) return;
@@ -204,6 +209,117 @@ export default function ProjectDetailPage() {
       }
     });
     setSaveStatus('unsaved');
+  };
+
+  const handleAnalyzeFootage = async () => {
+    if (!project) return;
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    
+    try {
+      const client = getSupabase();
+      let token = '';
+      if (client) {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          token = session.access_token;
+        }
+      }
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch('/api/autodirector/inspect', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          projectId: project.id,
+          assetPath: project.sourceUrl || project.mediaFilename, // gs:// format or filename
+          selectedNiche: project.selectedMode.split('-')[0] || 'cars',
+          selectedPreset: project.selectedMode,
+          maxAnalyzeSeconds: 60
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to inspect source footage.');
+      }
+
+      const data = await response.json();
+      setAnalysisResult(data);
+    } catch (err) {
+      console.error('AutoDirector Analysis failed:', err);
+      setAnalysisError((err as Error).message);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleGenerateEditDNA = async () => {
+    if (!project || !analysisResult || !analysisResult.analysis) return;
+
+    const confirmReplace = confirm(
+      "Replace current timeline with AutoDirector-generated EditDNA?\n\nTip: We will automatically save a backup of your current timeline in the Version History."
+    );
+    if (!confirmReplace) return;
+
+    try {
+      // 1. Auto-save current timeline as a backup version snapshot
+      try {
+        await createProjectVersion(project.id, {
+          blueprint: project.blueprint,
+          outputPath: project.mediaFilename,
+          diagnostics: {
+            videoDuration: project.blueprint.timelineBlocks.reduce((acc, b) => {
+              const parts = b.timestamp.split(' - ');
+              if (parts.length === 2) {
+                return Math.max(acc, parseFloat(parts[1]));
+              }
+              return acc;
+            }, 0),
+            codec: 'Backup before AutoDirector',
+            outputSize: 0
+          }
+        });
+        
+        // Reload versions list
+        const vers = await getProjectVersions(project.id);
+        setVersions(vers);
+      } catch (err) {
+        console.warn('Failed to auto-save backup version snapshot:', err);
+      }
+
+      // 2. Compile new EditDNA blueprint from the analysis result
+      const compiledBlueprint = compileAutoDirectorAnalysis(
+        project.id,
+        analysisResult.analysis,
+        analysisResult.recommendedPreset,
+        project.platform,
+        project.duration,
+        project.maxQualityMode
+      );
+
+      // 3. Update project state
+      const updatedProject: Project = {
+        ...project,
+        selectedMode: analysisResult.recommendedPreset,
+        blueprint: compiledBlueprint
+      };
+
+      setProject(updatedProject);
+      setSaveStatus('unsaved');
+      
+      // Success alert
+      alert("AutoDirector blueprint generated from raw footage.");
+    } catch (err) {
+      console.error('Failed to compile AutoDirector EditDNA:', err);
+      alert(`AutoDirector compiler failed: ${(err as Error).message}`);
+    }
   };
 
   const handleUpgradeRedirect = async () => {
@@ -432,6 +548,125 @@ export default function ProjectDetailPage() {
               }}
               onCreditExhausted={() => setShowUpgradeModal(true)}
             />
+
+            {/* AutoDirector AI Inspector Collapsible Panel */}
+            <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/40 flex flex-col gap-3">
+              <div 
+                onClick={() => setIsInspectorExpanded(!isInspectorExpanded)}
+                className="flex items-center justify-between border-b border-white/5 pb-2 cursor-pointer select-none"
+              >
+                <h3 className="text-xs font-mono font-bold tracking-widest text-gray-400 flex items-center gap-1.5">
+                  <Wand2 className="w-4 h-4 text-brand-cyan" /> AUTODIRECTOR AI INSPECTOR
+                </h3>
+                <span className="text-[10px] font-mono text-gray-500">
+                  {isInspectorExpanded ? 'COLLAPSE ▲' : 'EXPAND ▼'}
+                </span>
+              </div>
+
+              {isInspectorExpanded && (
+                <div className="flex flex-col gap-3">
+                  {isAnalyzing ? (
+                    <div className="flex flex-col items-center justify-center py-6 gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-brand-cyan" />
+                      <span className="text-[10px] font-mono text-gray-400 uppercase tracking-wider animate-pulse">
+                        Analyzing source footage...
+                      </span>
+                    </div>
+                  ) : analysisError ? (
+                    <div className="flex flex-col gap-2 p-3 rounded bg-red-950/20 border border-red-900/30">
+                      <span className="text-[10px] font-mono text-red-400 font-bold uppercase">Analysis Error</span>
+                      <p className="text-[10px] font-mono text-red-300">{analysisError}</p>
+                      <button
+                        onClick={handleAnalyzeFootage}
+                        className="mt-1 w-full py-1 rounded bg-red-900/30 hover:bg-red-900/50 text-red-200 font-bold font-mono text-[9px] uppercase tracking-wider transition-colors cursor-pointer"
+                      >
+                        Retry Analysis
+                      </button>
+                    </div>
+                  ) : !analysisResult ? (
+                    <div className="flex flex-col gap-2 text-center py-4">
+                      <p className="text-[10px] font-mono text-gray-500">
+                        Analyze raw video to extract layout metadata, quality signals, and recommended editing parameters.
+                      </p>
+                      <button
+                        onClick={handleAnalyzeFootage}
+                        className="w-full py-2 rounded bg-brand-cyan/15 hover:bg-brand-cyan/25 text-brand-cyan font-bold font-mono text-[10px] uppercase tracking-widest border border-brand-cyan/30 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <Wand2 className="w-3.5 h-3.5" /> Analyze Raw Footage
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3 font-mono text-[11px] leading-relaxed">
+                      {/* Basic Meta Grid */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="p-2 rounded bg-white/[0.01] border border-white/5 flex flex-col">
+                          <span className="text-[8px] text-gray-500 uppercase font-bold">Detected Niche</span>
+                          <span className="text-gray-200 font-bold uppercase">{analysisResult.analysis?.detectedNiche || analysisResult.detectedNiche || 'N/A'}</span>
+                        </div>
+                        <div className="p-2 rounded bg-[#000]/20 border border-white/5 flex flex-col">
+                          <span className="text-[8px] text-gray-500 uppercase font-bold">Rec Preset</span>
+                          <span className="text-gray-200 font-bold uppercase text-[10px] truncate">{analysisResult.recommendedPreset || 'N/A'}</span>
+                        </div>
+                        <div className="p-2 rounded bg-white/[0.01] border border-white/5 flex flex-col">
+                          <span className="text-[8px] text-gray-500 uppercase font-bold">Usable Dur</span>
+                          <span className="text-gray-200 font-bold">{analysisResult.analysis?.usableDuration || analysisResult.duration || 0}s</span>
+                        </div>
+                        <div className="p-2 rounded bg-white/[0.01] border border-white/5 flex flex-col">
+                          <span className="text-[8px] text-gray-500 uppercase font-bold">Proxy Samples</span>
+                          <span className="text-gray-200 font-bold">{analysisResult.sampleCount || 0} Frames</span>
+                        </div>
+                      </div>
+
+                      {/* Quality status flags */}
+                      <div className="p-2.5 rounded bg-white/[0.01] border border-white/5 flex flex-col gap-1.5">
+                        <span className="text-[8px] text-gray-500 uppercase font-bold">Quality Status Flags</span>
+                        <div className="grid grid-cols-3 gap-1.5 text-[9px] uppercase font-bold">
+                          <div className={`px-1.5 py-0.5 rounded text-center border ${analysisResult.qualityFlags?.blurry ? 'bg-brand-magenta/10 border-brand-magenta/30 text-brand-magenta' : 'bg-green-950/10 border-green-900/30 text-green-400'}`}>
+                            {analysisResult.qualityFlags?.blurry ? 'Blurry' : 'Sharp'}
+                          </div>
+                          <div className={`px-1.5 py-0.5 rounded text-center border ${analysisResult.qualityFlags?.shaky ? 'bg-brand-magenta/10 border-brand-magenta/30 text-brand-magenta' : 'bg-green-950/10 border-green-900/30 text-green-400'}`}>
+                            {analysisResult.qualityFlags?.shaky ? 'Shaky' : 'Stable'}
+                          </div>
+                          <div className={`px-1.5 py-0.5 rounded text-center border ${analysisResult.qualityFlags?.dark ? 'bg-brand-magenta/10 border-brand-magenta/30 text-brand-magenta' : 'bg-green-950/10 border-green-900/30 text-green-400'}`}>
+                            {analysisResult.qualityFlags?.dark ? 'Low-Light' : 'Lit'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Composition Sequence List */}
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[8px] text-gray-500 uppercase font-bold">Composition Sequence</span>
+                        <div className="flex flex-col gap-1.5 max-h-[150px] overflow-y-auto pr-1">
+                          {analysisResult.analysis?.compositionSequence?.map((seq: any, idx: number) => (
+                            <div key={idx} className="p-2 rounded bg-white/[0.02] border border-white/5 flex flex-col gap-1">
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="text-gray-300 font-bold uppercase">{seq.shotType?.replace('_', ' ') || 'Unknown Shot'}</span>
+                                <span className={`font-bold ${seq.usableScore >= 8.0 ? 'text-green-400' : 'text-yellow-400'}`}>
+                                  Score: {seq.usableScore}
+                                </span>
+                              </div>
+                              <p className="text-[9px] text-gray-500 leading-normal">{seq.subjectDescription}</p>
+                              <div className="flex justify-between text-[8px] text-gray-500 font-mono">
+                                <span>TIMECODE: {seq.startTime}s - {seq.endTime}s</span>
+                                <span className="uppercase">MOTION: {seq.motionIntensity || 'static'}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Action Button */}
+                      <button
+                        onClick={handleGenerateEditDNA}
+                        className="w-full mt-1 py-1.5 rounded bg-brand-cyan/25 hover:bg-brand-cyan/35 text-brand-cyan font-bold font-mono text-[9px] uppercase tracking-wider cursor-pointer text-center border border-brand-cyan/30 transition-all flex items-center justify-center gap-1"
+                      >
+                        <Wand2 className="w-3 h-3 text-brand-cyan" /> Generate EditDNA from Analysis
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Version History Collapsible Panel */}
             <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/40 flex flex-col gap-3">

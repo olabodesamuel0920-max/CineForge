@@ -45,3 +45,10 @@ next-env.d.ts
 /public/uploads/*
 !/public/uploads/promo.mp4
 
+# Worker build artefacts and debug output
+infrastructure/render-gcp/dist/tmp/
+infrastructure/render-gcp/dist/assets/
+infrastructure/render-gcp/output_no_text.mp4
+infrastructure/render-gcp/test_log.txt
+test_qsv.mp4
+test_qsv_hevc.mp4

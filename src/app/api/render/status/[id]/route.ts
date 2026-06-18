@@ -72,10 +72,10 @@ export async function GET(
     const backendStatus = (result.status || 'UNKNOWN').toUpperCase();
     const progress = result.percent ?? 0;
     
-    if (backendStatus === 'COMPLETED' || progress === 100) {
-      status = 'completed';
-    } else if (backendStatus === 'FAILED') {
+    if (backendStatus === 'FAILED') {
       status = 'failed';
+    } else if (backendStatus === 'COMPLETED' || progress === 100) {
+      status = 'completed';
     } else if (backendStatus.startsWith('QUEUED')) {
       status = 'queued';
     } else if (backendStatus === 'DOWNLOADING' || backendStatus === 'ANALYZING') {
