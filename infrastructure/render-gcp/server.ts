@@ -9,6 +9,7 @@ import { updateProgress, getProgress } from './firestore';
 import { extractAudioTransients } from './audioAnalysis';
 import { renderQueueManager, RenderJob } from './queue';
 import { AutoDirectorAnalysis } from './types/autodirector';
+import { AUDIO_ASSETS, SoundEvent, SoundDesignSettings, compileSoundDesignPlan } from './soundDesignCompiler';
 
 if (process.env.RENDER_MODE !== 'cloud') {
   process.env.RENDER_MODE = 'local';
@@ -44,28 +45,25 @@ function ensureDefaultAudioTracks() {
     }
   });
 
-  const trackFiles = [
-    'luxury_track.mp3',
-    'stadium_track.mp3',
-    'sugar_track.mp3',
-    'fashion_track.mp3',
-    'boss_track.mp3',
-    'brand_track.mp3',
-    'street_track.mp3',
-    'product_track.mp3'
-  ];
-
   const ffmpegCmd = getFfmpegCommand();
 
-  trackFiles.forEach(file => {
+  AUDIO_ASSETS.forEach(asset => {
+    const file = asset.fileName;
     const targetPath = path.join(audioDir, file);
     const workerTargetPath = path.join(workerAudioDir, file);
+
+    const isMusic = asset.category === 'music';
+    const duration = isMusic ? 60 : asset.duration;
 
     // Generate in public/audio if missing
     if (!fs.existsSync(targetPath)) {
       try {
         console.log(`[Startup] Generating default track: ${targetPath}`);
-        execSync(`"${ffmpegCmd}" -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 60 -c:a libmp3lame "${targetPath}"`, { stdio: 'ignore' });
+        if (isMusic || asset.category === 'ambience') {
+          execSync(`"${ffmpegCmd}" -y -f lavfi -i anullsrc=r=44100:cl=stereo -t ${duration} -c:a libmp3lame "${targetPath}"`, { stdio: 'ignore' });
+        } else {
+          execSync(`"${ffmpegCmd}" -y -f lavfi -i "sine=frequency=800:duration=${duration}" -c:a libmp3lame "${targetPath}"`, { stdio: 'ignore' });
+        }
       } catch (err) {
         console.warn(`Failed to generate default track at ${targetPath}:`, err);
       }
@@ -78,7 +76,11 @@ function ensureDefaultAudioTracks() {
           fs.copyFileSync(targetPath, workerTargetPath);
         } else {
           console.log(`[Startup] Generating default worker track: ${workerTargetPath}`);
-          execSync(`"${ffmpegCmd}" -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 60 -c:a libmp3lame "${workerTargetPath}"`, { stdio: 'ignore' });
+          if (isMusic || asset.category === 'ambience') {
+            execSync(`"${ffmpegCmd}" -y -f lavfi -i anullsrc=r=44100:cl=stereo -t ${duration} -c:a libmp3lame "${workerTargetPath}"`, { stdio: 'ignore' });
+          } else {
+            execSync(`"${ffmpegCmd}" -y -f lavfi -i "sine=frequency=800:duration=${duration}" -c:a libmp3lame "${workerTargetPath}"`, { stdio: 'ignore' });
+          }
         }
       } catch (err) {
         console.warn(`Failed to generate default worker track at ${workerTargetPath}:`, err);
@@ -99,12 +101,39 @@ const timelineBlockSchema = z.object({
   speedRamp: z.string().optional()
 });
 
+const soundEventSchema = z.object({
+  type: z.enum(['music bed', 'whoosh', 'riser', 'bass impact', 'soft impact', 'ambience', 'contextual Foley', 'outro sting']),
+  assetId: z.string(),
+  startTime: z.number().nonnegative(),
+  duration: z.number().positive(),
+  volume: z.number().nonnegative(),
+  pan: z.number().min(-1.0).max(1.0).optional(),
+  pitch: z.number().min(-12).max(12).optional(),
+  fadeIn: z.number().nonnegative().optional(),
+  fadeOut: z.number().nonnegative().optional(),
+  duckingAmount: z.number().min(0.0).max(1.0).optional(),
+  relatedBlockId: z.string().optional(),
+  reason: z.string().optional()
+});
+
+const soundDesignSettingsSchema = z.object({
+  enabled: z.boolean(),
+  intensity: z.enum(['subtle', 'balanced', 'aggressive']),
+  preserveOriginal: z.enum(['auto', 'yes', 'no']),
+  musicMood: z.string(),
+  foleyEnabled: z.boolean()
+});
+
+const audioConfigSchema = z.object({
+  bpm: z.number().optional(),
+  drop_at: z.number().optional(),
+  settings: soundDesignSettingsSchema.optional(),
+  events: z.array(soundEventSchema).optional()
+});
+
 const blueprintSchema = z.object({
   timeline: z.array(timelineBlockSchema).nonempty('Timeline blocks cannot be empty'),
-  audio: z.object({
-    bpm: z.number().optional(),
-    drop_at: z.number().optional()
-  }).optional(),
+  audio: audioConfigSchema.optional(),
   color_grade: z.object({
     warmth: z.number().optional(),
     contrast: z.number().optional(),
@@ -442,6 +471,79 @@ function cleanupExpiredAssets() {
 // Start automated background asset cleanup loop (every 15 minutes)
 setInterval(cleanupExpiredAssets, 15 * 60 * 1000);
 
+async function resolveSoundDesignAssets(
+  events: SoundEvent[],
+  tmpDir: string,
+  job: RenderJob
+): Promise<Record<string, string>> {
+  const resolvedPaths: Record<string, string> = {};
+  const isProd = process.env.RENDER_MODE === 'cloud';
+
+  for (const event of events) {
+    const assetId = event.assetId;
+    if (resolvedPaths[assetId]) continue;
+
+    const asset = AUDIO_ASSETS.find(a => a.id === assetId);
+    if (!asset) {
+      console.warn(`[Sound Design] Asset ID ${assetId} not found in master manifest.`);
+      continue;
+    }
+
+    // 1. Check local assets/audio cache
+    const possiblePaths = [
+      path.join(__dirname, 'assets', 'audio', asset.fileName),
+      path.join(__dirname, '..', 'assets', 'audio', asset.fileName),
+      path.join(process.cwd(), 'public', 'audio', asset.fileName),
+    ];
+
+    let localPath = '';
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        localPath = p;
+        break;
+      }
+    }
+
+    if (localPath) {
+      resolvedPaths[assetId] = localPath;
+      continue;
+    }
+
+    // 2. Not found locally, download from GCS
+    const targetDownloadPath = path.join(tmpDir, `asset-${assetId}.mp3`);
+    try {
+      console.log(`[Sound Design] Downloading asset ${assetId} from GCS ${asset.gcsPath}`);
+      await downloadFromGcs(asset.gcsPath, targetDownloadPath);
+      
+      const cacheDir = path.join(__dirname, 'assets', 'audio');
+      if (fs.existsSync(cacheDir)) {
+        const cachedFilePath = path.join(cacheDir, asset.fileName);
+        fs.copyFileSync(targetDownloadPath, cachedFilePath);
+        resolvedPaths[assetId] = cachedFilePath;
+        try { fs.unlinkSync(targetDownloadPath); } catch {}
+      } else {
+        job.activeFiles.push(targetDownloadPath);
+        resolvedPaths[assetId] = targetDownloadPath;
+      }
+    } catch (err) {
+      console.error(`[Sound Design] Failed to download asset ${assetId} from GCS:`, err);
+      if (!isProd) {
+        try {
+          const ffmpegCmd = getFfmpegCommand();
+          const duration = asset.category === 'music' ? 60 : asset.duration;
+          execSync(`"${ffmpegCmd}" -y -f lavfi -i "sine=frequency=800:duration=${duration}" -c:a libmp3lame "${targetDownloadPath}"`, { stdio: 'ignore' });
+          job.activeFiles.push(targetDownloadPath);
+          resolvedPaths[assetId] = targetDownloadPath;
+        } catch (e) {
+          console.error(`[Sound Design] Failed to generate local fallback for ${assetId}:`, e);
+        }
+      }
+    }
+  }
+
+  return resolvedPaths;
+}
+
 // Initialize Queue Manager runners
 renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
   const isLocalWindows = process.platform === 'win32';
@@ -624,6 +726,52 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
 
     const totalDuration = conformedTimeline.reduce((acc, b) => acc + (b.end - b.start) / b.speed, 0);
 
+    // Resolve sound design config
+    let soundEvents: SoundEvent[] = payload.blueprint.audio?.events || [];
+    let soundSettings: SoundDesignSettings = payload.blueprint.audio?.settings || {
+      enabled: true,
+      intensity: 'balanced',
+      preserveOriginal: 'auto',
+      musicMood: '',
+      foleyEnabled: true
+    };
+
+    // Fallback compiler if enabled and events not present
+    if (soundSettings.enabled && soundEvents.length === 0) {
+      const presetName = payload.blueprint.selected_mode || 'luxury-demon-reveal';
+      const fakePreset = { id: presetName, name: presetName, niche: 'general', audioProfile: '' };
+      soundEvents = compileSoundDesignPlan(conformedTimeline, null, fakePreset, soundSettings);
+    }
+
+    const resolvedSFXPaths = await resolveSoundDesignAssets(soundEvents, tmpDir, job);
+
+    const assetIdToInputIndex: Record<string, number> = {};
+    let nextInputIndex = 1; // Input 0 is the video
+
+    const ffmpegArgs = [
+      '-y',
+      '-i', localInputPath
+    ];
+
+    // Check if we have a music bed event to map it to input 1 (localSoundtrackPath)
+    const musicBedEvent = soundEvents.find(e => e.type === 'music bed');
+    if (musicBedEvent) {
+      ffmpegArgs.push('-stream_loop', '-1', '-i', localSoundtrackPath);
+      assetIdToInputIndex[musicBedEvent.assetId] = 1;
+      nextInputIndex = 2;
+    } else {
+      ffmpegArgs.push('-i', localSoundtrackPath);
+      nextInputIndex = 2;
+    }
+
+    // Map other unique assets
+    const uniqueAssetIds = Object.keys(resolvedSFXPaths).filter(id => assetIdToInputIndex[id] === undefined);
+    uniqueAssetIds.forEach(id => {
+      ffmpegArgs.push('-i', resolvedSFXPaths[id]);
+      assetIdToInputIndex[id] = nextInputIndex;
+      nextInputIndex++;
+    });
+
     const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = buildFilterComplex(
       conformedTimeline,
       payload.blueprint.color_grade,
@@ -631,16 +779,18 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
       hasAudio,
       payload.blueprint.selected_mode,
       payload.blueprint.viewer_emotion,
-      payload.blueprint.hook_intensity
+      payload.blueprint.hook_intensity,
+      undefined,
+      undefined,
+      soundEvents,
+      soundSettings,
+      assetIdToInputIndex
     );
 
-    const ffmpegArgs = [
-      '-y',
-      '-i', localInputPath,
-      '-i', localSoundtrackPath,
+    ffmpegArgs.push(
       '-filter_complex', filterComplex,
       '-map', `[${videoMap}]`
-    ];
+    );
 
     if (outputHasAudio) {
       ffmpegArgs.push('-map', `[${audioMap}]`);
@@ -923,6 +1073,62 @@ renderQueueManager.executePreviewRunner = async (job: RenderJob) => {
       }];
     }
 
+    // Resolve sound design config for preview
+    let soundEvents: SoundEvent[] = payload.blueprint.audio?.events || [];
+    let soundSettings: SoundDesignSettings = payload.blueprint.audio?.settings || {
+      enabled: true,
+      intensity: 'balanced',
+      preserveOriginal: 'auto',
+      musicMood: '',
+      foleyEnabled: true
+    };
+
+    // Fallback compiler if enabled and events not present
+    if (soundSettings.enabled && soundEvents.length === 0) {
+      const presetName = payload.blueprint.selected_mode || 'luxury-demon-reveal';
+      const fakePreset = { id: presetName, name: presetName, niche: 'general', audioProfile: '' };
+      soundEvents = compileSoundDesignPlan(conformedTimeline, null, fakePreset, soundSettings);
+    }
+
+    const previewStartVal = previewStart !== undefined ? previewStart : 0;
+    const previewDurationVal = previewDuration !== undefined ? previewDuration : videoMetadata.duration;
+    const previewEndVal = previewStartVal + previewDurationVal;
+
+    const overlappingEvents = soundEvents.filter(e => {
+      return e.startTime < previewEndVal && (e.startTime + e.duration) > previewStartVal;
+    });
+
+    const resolvedSFXPaths = await resolveSoundDesignAssets(overlappingEvents, tmpDir, job);
+
+    const assetIdToInputIndex: Record<string, number> = {};
+    let nextInputIndex = 1; // Input 0 is video
+
+    const ffmpegArgs = [
+      '-y',
+      '-ss', previewStart.toString(),
+      '-t', previewDuration.toString(),
+      '-i', localInputPath
+    ];
+
+    // Check if we have a music bed event that overlaps
+    const musicBedEvent = overlappingEvents.find(e => e.type === 'music bed');
+    if (musicBedEvent) {
+      ffmpegArgs.push('-ss', previewStart.toString(), '-t', previewDuration.toString(), '-stream_loop', '-1', '-i', localSoundtrackPath);
+      assetIdToInputIndex[musicBedEvent.assetId] = 1;
+      nextInputIndex = 2;
+    } else {
+      ffmpegArgs.push('-ss', previewStart.toString(), '-t', previewDuration.toString(), '-i', localSoundtrackPath);
+      nextInputIndex = 2;
+    }
+
+    // Map other unique assets
+    const uniqueAssetIds = Object.keys(resolvedSFXPaths).filter(id => assetIdToInputIndex[id] === undefined);
+    uniqueAssetIds.forEach(id => {
+      ffmpegArgs.push('-i', resolvedSFXPaths[id]);
+      assetIdToInputIndex[id] = nextInputIndex;
+      nextInputIndex++;
+    });
+
     const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = buildFilterComplex(
       conformedTimeline,
       payload.blueprint.color_grade,
@@ -932,20 +1138,16 @@ renderQueueManager.executePreviewRunner = async (job: RenderJob) => {
       payload.blueprint.viewer_emotion,
       payload.blueprint.hook_intensity,
       previewStart,
-      previewDuration
+      previewDuration,
+      soundEvents,
+      soundSettings,
+      assetIdToInputIndex
     );
 
-    const ffmpegArgs = [
-      '-y',
-      '-ss', previewStart.toString(),
-      '-t', previewDuration.toString(),
-      '-i', localInputPath,
-      '-ss', previewStart.toString(),
-      '-t', previewDuration.toString(),
-      '-i', localSoundtrackPath,
+    ffmpegArgs.push(
       '-filter_complex', filterComplex,
       '-map', `[${videoMap}]`
-    ];
+    );
 
     if (outputHasAudio) {
       ffmpegArgs.push('-map', `[${audioMap}]`);

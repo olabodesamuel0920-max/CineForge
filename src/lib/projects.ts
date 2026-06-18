@@ -7,6 +7,7 @@ import {
 } from './storage';
 import { Project, CreateProjectInput, PlatformStatus, ProjectDuration, ProjectPlatform, EditDNABlueprint, ProjectVersion, BrandPreset } from '@/types/project';
 import { generateEditDNABlueprint } from './blueprints';
+import { parseSoundDirection, serializeSoundDirection } from './soundDesignCompiler';
 
 export type { CreateProjectInput };
 
@@ -88,20 +89,25 @@ function mapRowToProject(row: any): Project {
     createdAt: row.created_at,
     sourceType: row.source_type ?? (isDemo ? 'demo' : 'upload'),
     sourceUrl: row.source_url ?? (isDemo ? '/uploads/promo.mp4' : undefined),
-    blueprint: bp ? {
-      editTitle: bp.edit_title,
-      viewerEmotion: bp.viewer_emotion,
-      hookStrategy: bp.hook_strategy,
-      timelineBlocks: bp.timeline_blocks || [],
-      cutRhythm: bp.cut_rhythm,
-      speedRampPlan: bp.speed_ramp_plan,
-      vfxDirection: bp.vfx_direction,
-      captionStyle: bp.caption_style,
-      colorGrade: bp.color_grade,
-      soundDirection: bp.sound_direction,
-      maxQualityPlan: bp.max_quality_plan,
-      exportRecommendation: bp.export_recommendation,
-    } : {
+    blueprint: bp ? (() => {
+      const parsedSound = parseSoundDirection(bp.sound_direction, bp.sound_direction || '');
+      return {
+        editTitle: bp.edit_title,
+        viewerEmotion: bp.viewer_emotion,
+        hookStrategy: bp.hook_strategy,
+        timelineBlocks: bp.timeline_blocks || [],
+        cutRhythm: bp.cut_rhythm,
+        speedRampPlan: bp.speed_ramp_plan,
+        vfxDirection: bp.vfx_direction,
+        captionStyle: bp.caption_style,
+        colorGrade: bp.color_grade,
+        soundDirection: parsedSound.direction,
+        maxQualityPlan: bp.max_quality_plan,
+        exportRecommendation: bp.export_recommendation,
+        soundDesignSettings: parsedSound.settings,
+        soundEvents: parsedSound.events
+      };
+    })() : {
       editTitle: row.title,
       viewerEmotion: row.viewer_emotion || '',
       hookStrategy: '',
@@ -233,7 +239,17 @@ export async function createProject(input: CreateProjectInput, customBlueprint?:
         vfx_direction: blueprint.vfxDirection,
         caption_style: blueprint.captionStyle,
         color_grade: blueprint.colorGrade,
-        sound_direction: blueprint.soundDirection,
+        sound_direction: serializeSoundDirection(
+          blueprint.soundDirection,
+          blueprint.soundDesignSettings || {
+            enabled: true,
+            intensity: 'balanced',
+            preserveOriginal: 'auto',
+            musicMood: 'luxury_track',
+            foleyEnabled: true
+          },
+          blueprint.soundEvents || []
+        ),
         max_quality_plan: blueprint.maxQualityPlan,
         export_recommendation: blueprint.exportRecommendation
       });
@@ -292,7 +308,17 @@ export async function updateProject(project: Project): Promise<Project> {
         vfx_direction: project.blueprint.vfxDirection,
         caption_style: project.blueprint.captionStyle,
         color_grade: project.blueprint.colorGrade,
-        sound_direction: project.blueprint.soundDirection,
+        sound_direction: serializeSoundDirection(
+          project.blueprint.soundDirection,
+          project.blueprint.soundDesignSettings || {
+            enabled: true,
+            intensity: 'balanced',
+            preserveOriginal: 'auto',
+            musicMood: 'luxury_track',
+            foleyEnabled: true
+          },
+          project.blueprint.soundEvents || []
+        ),
         max_quality_plan: project.blueprint.maxQualityPlan,
         export_recommendation: project.blueprint.exportRecommendation
       })

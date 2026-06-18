@@ -73,7 +73,7 @@ function buildTextOverlayFilter(text, fontPath, segmentDuration, vfx, intensity 
  * Compiles the entire timeline blueprint into an FFmpeg -filter_complex argument.
  * Implements style-specific video crop zooms and dynamic subtitle audio ducking.
  */
-function buildFilterComplex(timeline, colorGrade, fontPath, inputHasAudio, selectedMode, viewerEmotion, hookIntensity, previewStart, previewDuration) {
+function buildFilterComplex(timeline, colorGrade, fontPath, inputHasAudio, selectedMode, viewerEmotion, hookIntensity, previewStart, previewDuration, soundEvents, soundSettings, assetIdToInputIndex) {
     const filterParts = [];
     const concatInputs = [];
     // Parse and clamp hook intensity (defaulting to 1.0 if not specified)
@@ -121,6 +121,11 @@ function buildFilterComplex(timeline, colorGrade, fontPath, inputHasAudio, selec
         currentOutputTime += segmentDuration;
     });
     const conditionStr = duckingIntervals.length > 0 ? duckingIntervals.join('+') : '';
+    // Dialogue Protection logic
+    const isSoundDesignActive = soundSettings ? soundSettings.enabled : true;
+    const preserveOriginal = soundSettings ? soundSettings.preserveOriginal : 'auto';
+    // Decide if we should keep raw video audio track at all
+    const shouldKeepRawAudio = inputHasAudio && (isSoundDesignActive ? preserveOriginal !== 'no' : true);
     // 2. Process each segment's video and audio tracks
     conformedTimeline.forEach((block, index) => {
         const vTrimLabel = `vtrim_${index}`;
@@ -179,7 +184,6 @@ function buildFilterComplex(timeline, colorGrade, fontPath, inputHasAudio, selec
         // 3. Apply Style-Specific Post-Scale Filters (e.g. Vignette which requires final 9:16 borders)
         const postScaleFilters = [];
         if (selectedMode === 'luxury-demon-reveal') {
-            // PI/(3 + intensity) is perfect to avoid over-darkening mobile portrait edges while maintaining style
             postScaleFilters.push(`vignette=angle='PI/(3 + ${intensity.toFixed(3)})'`);
         }
         const vPostLabel = `vpost_${index}`;
@@ -197,8 +201,8 @@ function buildFilterComplex(timeline, colorGrade, fontPath, inputHasAudio, selec
         else {
             filterParts.push(`[${vPostLabel}]null[${vFinalLabel}]`);
         }
-        // Process Segment Audio (with silent fallback if source has no audio track)
-        if (inputHasAudio) {
+        // Process Segment Audio (with silent fallback if source has no audio track or muted)
+        if (shouldKeepRawAudio) {
             const audioSpeedFilter = buildAudioSpeedRampFilter(block.speed);
             filterParts.push(`[0:a]atrim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},${audioSpeedFilter}[${aFinalLabel}]`);
         }
@@ -212,15 +216,106 @@ function buildFilterComplex(timeline, colorGrade, fontPath, inputHasAudio, selec
     const audioMap = 'aout';
     const aConcatLabel = 'a_primary_concat';
     filterParts.push(`${concatInputs.join('')}concat=n=${conformedTimeline.length}:v=1:a=1[${videoMap}][${aConcatLabel}]`);
-    // 3. Audio Ducking Mix Framework
-    // Extract condition and apply timeline-aware volume attenuation to soundtrack input stream [1:a]
-    const bgVolumeExpr = `if(${conditionStr || '0'},0.25,1.0)`;
-    filterParts.push(`[1:a]volume='${bgVolumeExpr}':eval=frame[ducked_music_raw]`);
-    // Force both audio channels through explicit sample rate conversion to 44100Hz preceding the mix graph
-    filterParts.push(`[${aConcatLabel}]aresample=44100[a_primary_resampled]`);
-    filterParts.push(`[ducked_music_raw]aresample=44100[ducked_music_resampled]`);
-    // Combine conformed primary audio and resampled, ducked soundtrack
-    filterParts.push(`[a_primary_resampled][ducked_music_resampled]amix=inputs=2:normalize=0[${audioMap}]`);
+    // Dialogue Protection volume adjustments for primary audio track
+    let rawAudioVolume = 1.0;
+    if (isSoundDesignActive) {
+        if (preserveOriginal === 'no') {
+            rawAudioVolume = 0.0;
+        }
+        else if (preserveOriginal === 'auto') {
+            const mode = (selectedMode || '').toLowerCase();
+            const isVisualNiche = mode.includes('luxury') || mode.includes('stadium') || mode.includes('sugar') || mode.includes('fashion') || mode.includes('street') || mode.includes('crave');
+            rawAudioVolume = isVisualNiche ? 0.15 : 1.0; // Reduce in visuals, keep in dialogue niches
+        }
+    }
+    // Determine active events to process (seeking and trimming if in preview mode)
+    let activeEvents = soundEvents || [];
+    let timelineDuration = totalDuration;
+    if (previewStart !== undefined && previewDuration !== undefined) {
+        const previewEnd = previewStart + previewDuration;
+        activeEvents = (soundEvents || []).filter(e => {
+            return e.startTime < previewEnd && (e.startTime + e.duration) > previewStart;
+        }).map(e => {
+            const start = Math.max(0, e.startTime - previewStart);
+            const end = Math.min(e.duration, e.startTime + e.duration - previewStart);
+            return {
+                ...e,
+                startTime: start,
+                duration: end
+            };
+        });
+        timelineDuration = previewDuration;
+    }
+    // 3. Audio Mixing Pipeline
+    if (!isSoundDesignActive || activeEvents.length === 0 || !assetIdToInputIndex) {
+        // Legacy Basic Ducking Mix
+        const bgVolumeExpr = `if(${conditionStr || '0'},0.25,1.0)`;
+        filterParts.push(`[1:a]volume='${bgVolumeExpr}':eval=frame[ducked_music_raw]`);
+        filterParts.push(`[${aConcatLabel}]aresample=44100,volume=${rawAudioVolume}[a_primary_adjusted]`);
+        filterParts.push(`[ducked_music_raw]aresample=44100[ducked_music_resampled]`);
+        filterParts.push(`[a_primary_adjusted][ducked_music_resampled]amix=inputs=2:normalize=0,atrim=end=${timelineDuration.toFixed(3)},loudnorm=I=-14:TP=-1.0[${audioMap}]`);
+    }
+    else {
+        // Advanced Multi-Track Cinematic Sound Mix Graph
+        // Conformed primary raw audio channel
+        filterParts.push(`[${aConcatLabel}]aresample=44100,volume=${rawAudioVolume}[a_primary_adjusted]`);
+        // Compile sidechain music ducking intervals
+        const musicDuckingIntervals = [...duckingIntervals];
+        activeEvents.forEach(e => {
+            if (e.type !== 'music bed' && e.duckingAmount !== undefined && e.duckingAmount > 0) {
+                musicDuckingIntervals.push(`between(t,${e.startTime.toFixed(3)},${(e.startTime + e.duration).toFixed(3)})`);
+            }
+        });
+        const duckCondition = musicDuckingIntervals.length > 0 ? musicDuckingIntervals.join('+') : '';
+        const musicDuckingExpr = duckCondition ? `if(${duckCondition},0.25,1.0)` : '1.0';
+        const mixInputs = ['[a_primary_adjusted]'];
+        activeEvents.forEach((e, idx) => {
+            const inputIdx = assetIdToInputIndex[e.assetId];
+            if (inputIdx === undefined) {
+                console.warn(`[FFmpeg compiler] Skipping event ${idx} because assetId ${e.assetId} has no resolved input.`);
+                return; // Skip missing assets gracefully
+            }
+            const outLabel = `se_${idx}`;
+            mixInputs.push(`[${outLabel}]`);
+            // Determine fades
+            let fadeFilter = '';
+            if (e.fadeIn && e.fadeIn > 0) {
+                fadeFilter += `,afade=t=in:ss=0:d=${e.fadeIn.toFixed(3)}`;
+            }
+            if (e.fadeOut && e.fadeOut > 0) {
+                const fadeStart = e.duration - e.fadeOut;
+                fadeFilter += `,afade=t=out:st=${fadeStart.toFixed(3)}:d=${e.fadeOut.toFixed(3)}`;
+            }
+            // Determine pitch shift semitone filters
+            let pitchFilter = '';
+            if (e.pitch !== undefined && e.pitch !== 0) {
+                const ratio = Math.pow(2, e.pitch / 12);
+                const rate = Math.round(44100 * ratio);
+                pitchFilter = `,asetrate=${rate},atempo=${(1 / ratio).toFixed(3)},aresample=44100`;
+            }
+            // Determine stereo panning filter
+            let panFilter = '';
+            if (e.pan !== undefined) {
+                const p = Math.max(-1.0, Math.min(1.0, e.pan));
+                const leftGain = ((1 - p) / 2).toFixed(3);
+                const rightGain = ((1 + p) / 2).toFixed(3);
+                panFilter = `,pan=stereo|c0=${leftGain}*c0|c1=${rightGain}*c1`;
+            }
+            // Delay offset timing filter
+            const delayMs = Math.round(e.startTime * 1000);
+            const delayFilter = delayMs > 0 ? `,adelay=${delayMs}|${delayMs}` : '';
+            if (e.type === 'music bed') {
+                // Music bed stream is looped and ducked dynamically
+                filterParts.push(`[${inputIdx}:a]atrim=end=${timelineDuration.toFixed(3)},asetpts=PTS-STARTPTS,volume='${musicDuckingExpr}':eval=frame,volume=${e.volume.toFixed(3)}${fadeFilter}${pitchFilter}${panFilter}${delayFilter},aresample=44100[${outLabel}]`);
+            }
+            else {
+                // SFX sound event is trimmed, faded, panned, pitched and delayed
+                filterParts.push(`[${inputIdx}:a]atrim=end=${e.duration.toFixed(3)},asetpts=PTS-STARTPTS,volume=${e.volume.toFixed(3)}${fadeFilter}${pitchFilter}${panFilter}${delayFilter},aresample=44100[${outLabel}]`);
+            }
+        });
+        // Mix conformed tracks & sound events, conform final length, and master normalize/limit
+        filterParts.push(`${mixInputs.join('')}amix=inputs=${mixInputs.length}:normalize=0,atrim=end=${timelineDuration.toFixed(3)},loudnorm=I=-14:TP=-1.0[${audioMap}]`);
+    }
     return {
         filterComplex: filterParts.join('; '),
         videoMap,

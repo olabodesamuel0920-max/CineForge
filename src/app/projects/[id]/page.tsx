@@ -7,7 +7,9 @@ import { Project, TimelineBlock } from '@/types/project';
 import { getProjectById, getActiveUser, updateProject, getProjectVersions, getBrandPresets, createBrandPreset, deleteBrandPreset, createProjectVersion } from '@/lib/projects';
 import { ProjectVersion, BrandPreset } from '@/types/project';
 import { compileAutoDirectorAnalysis } from '@/lib/autodirectorCompiler';
+import { compileSoundDesignPlan, AUDIO_ASSETS, SoundDesignSettings, SoundEvent } from '@/lib/soundDesignCompiler';
 import { getModeById } from '@/lib/cineforgeModes';
+import { getPresetById, STYLE_PRESETS } from '@/lib/presetsRegistry';
 import { getSupabase } from '@/lib/supabase';
 import CinematicPreviewPanel from '@/components/CinematicPreviewPanel';
 import BeatMapPreview from '@/components/BeatMapPreview';
@@ -42,6 +44,16 @@ export default function ProjectDetailPage() {
   const [analysisResult, setAnalysisResult] = useState<any | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isInspectorExpanded, setIsInspectorExpanded] = useState(true);
+  const [isSoundPanelExpanded, setIsSoundPanelExpanded] = useState(true);
+
+  const soundSettings: SoundDesignSettings = project?.blueprint?.soundDesignSettings || {
+    enabled: true,
+    intensity: 'balanced',
+    preserveOriginal: 'auto',
+    musicMood: 'luxury_track',
+    foleyEnabled: true
+  };
+  const soundEvents: SoundEvent[] = project?.blueprint?.soundEvents || [];
 
   const loadVersionsAndPresets = async () => {
     if (!id) return;
@@ -320,6 +332,40 @@ export default function ProjectDetailPage() {
       console.error('Failed to compile AutoDirector EditDNA:', err);
       alert(`AutoDirector compiler failed: ${(err as Error).message}`);
     }
+  };
+
+  const handleSoundSettingsChange = (updatedSettings: Partial<SoundDesignSettings>) => {
+    if (!project) return;
+
+    const currentSettings: SoundDesignSettings = project.blueprint.soundDesignSettings || {
+      enabled: true,
+      intensity: 'balanced',
+      preserveOriginal: 'auto',
+      musicMood: 'luxury_track',
+      foleyEnabled: true
+    };
+
+    const newSettings = { ...currentSettings, ...updatedSettings };
+
+    const presetId = project.selectedMode;
+    const preset = getPresetById(presetId) || STYLE_PRESETS[0];
+
+    const newEvents = compileSoundDesignPlan(
+      project.blueprint.timelineBlocks,
+      null,
+      preset,
+      newSettings
+    );
+
+    setProject({
+      ...project,
+      blueprint: {
+        ...project.blueprint,
+        soundDesignSettings: newSettings,
+        soundEvents: newEvents
+      }
+    });
+    setSaveStatus('unsaved');
   };
 
   const handleUpgradeRedirect = async () => {
@@ -663,6 +709,127 @@ export default function ProjectDetailPage() {
                         <Wand2 className="w-3 h-3 text-brand-cyan" /> Generate EditDNA from Analysis
                       </button>
                     </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Cinematic Sound Design Panel */}
+            <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/40 flex flex-col gap-3">
+              <div 
+                onClick={() => setIsSoundPanelExpanded(!isSoundPanelExpanded)}
+                className="flex items-center justify-between border-b border-white/5 pb-2 cursor-pointer select-none"
+              >
+                <h3 className="text-xs font-mono font-bold tracking-widest text-gray-400 flex items-center gap-1.5">
+                  <Volume2 className="w-4 h-4 text-brand-cyan" /> CINEMATIC SOUND DESIGN
+                </h3>
+                <span className="text-[10px] font-mono text-gray-500">
+                  {isSoundPanelExpanded ? 'COLLAPSE ▲' : 'EXPAND ▼'}
+                </span>
+              </div>
+
+              {isSoundPanelExpanded && (
+                <div className="flex flex-col gap-3">
+                  {/* Enabled Toggle */}
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-gray-400">SOUND DESIGN ENGINE</span>
+                    <button
+                      onClick={() => handleSoundSettingsChange({ enabled: !soundSettings.enabled })}
+                      className={`px-3 py-1 rounded text-[9px] font-bold uppercase transition-all ${
+                        soundSettings.enabled
+                          ? 'bg-brand-cyan/20 text-brand-cyan border border-brand-cyan/30'
+                          : 'bg-white/5 text-gray-500 border border-white/5'
+                      }`}
+                    >
+                      {soundSettings.enabled ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+
+                  {soundSettings.enabled && (
+                    <>
+                      {/* Mix Intensity */}
+                      <div className="flex flex-col gap-1 text-[11px] font-mono">
+                        <span className="text-gray-400">MIX INTENSITY</span>
+                        <select
+                          value={soundSettings.intensity}
+                          onChange={(e) => handleSoundSettingsChange({ intensity: e.target.value as any })}
+                          className="bg-black/40 border border-white/10 rounded px-2 py-1 text-gray-200 text-[10px] focus:outline-none"
+                        >
+                          <option value="subtle">Subtle (-6dB offset)</option>
+                          <option value="balanced">Balanced (Cinema Standard)</option>
+                          <option value="aggressive">Aggressive (+3.5dB boost)</option>
+                        </select>
+                      </div>
+
+                      {/* Original Audio Handling */}
+                      <div className="flex flex-col gap-1 text-[11px] font-mono">
+                        <span className="text-gray-400">RAW FOOTAGE AUDIO</span>
+                        <select
+                          value={soundSettings.preserveOriginal}
+                          onChange={(e) => handleSoundSettingsChange({ preserveOriginal: e.target.value as any })}
+                          className="bg-black/40 border border-white/10 rounded px-2 py-1 text-gray-200 text-[10px] focus:outline-none"
+                        >
+                          <option value="auto">Auto (Ducks when music/Foley hits)</option>
+                          <option value="yes">Preserve (Maintain full original volume)</option>
+                          <option value="no">Mute (Completely replace raw track)</option>
+                        </select>
+                      </div>
+
+                      {/* Music Mood Selector */}
+                      <div className="flex flex-col gap-1 text-[11px] font-mono">
+                        <span className="text-gray-400">MUSIC BED GENRE</span>
+                        <select
+                          value={soundSettings.musicMood}
+                          onChange={(e) => handleSoundSettingsChange({ musicMood: e.target.value })}
+                          className="bg-black/40 border border-white/10 rounded px-2 py-1 text-gray-200 text-[10px] focus:outline-none"
+                        >
+                          <option value="">(AUTO RESOLVE FROM PRESET)</option>
+                          {AUDIO_ASSETS.filter(a => a.category === 'music').map(track => (
+                            <option key={track.id} value={track.id}>
+                              {track.id.replace('_track', '').toUpperCase()} - {track.license}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Contextual Foley Toggle */}
+                      <div className="flex items-center justify-between text-[11px] font-mono">
+                        <span className="text-gray-400">CONTEXT Foley EFFECTS</span>
+                        <button
+                          onClick={() => handleSoundSettingsChange({ foleyEnabled: !soundSettings.foleyEnabled })}
+                          className={`px-3 py-1 rounded text-[9px] font-bold uppercase transition-all ${
+                            soundSettings.foleyEnabled
+                              ? 'bg-brand-violet/20 text-brand-violet border border-brand-violet/30'
+                              : 'bg-white/5 text-gray-500 border border-white/5'
+                          }`}
+                        >
+                          {soundSettings.foleyEnabled ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
+
+                      {/* sound design list */}
+                      {soundEvents.length > 0 && (
+                        <div className="flex flex-col gap-1.5 mt-2">
+                          <span className="text-[8px] text-gray-500 uppercase font-bold tracking-widest">COMPILED SOUND EVENTS ({soundEvents.length})</span>
+                          <div className="flex flex-col gap-1.5 max-h-[160px] overflow-y-auto pr-1">
+                            {soundEvents.map((evt, idx) => (
+                              <div key={idx} className="p-2 rounded bg-white/[0.02] border border-white/5 flex flex-col gap-1">
+                                <div className="flex items-center justify-between text-[9px] font-mono">
+                                  <span className="text-brand-cyan font-bold uppercase">{evt.type}</span>
+                                  <span className="text-gray-400">{evt.startTime.toFixed(1)}s - {(evt.startTime + evt.duration).toFixed(1)}s</span>
+                                </div>
+                                <p className="text-[9px] text-gray-500 leading-normal">{evt.reason}</p>
+                                <div className="flex gap-2 text-[8px] text-gray-500 font-mono">
+                                  <span>VOL: {(evt.volume * 100).toFixed(0)}%</span>
+                                  {evt.pan !== undefined && <span>PAN: {evt.pan > 0 ? `R:${evt.pan.toFixed(1)}` : (evt.pan < 0 ? `L:${Math.abs(evt.pan).toFixed(1)}` : 'C')}</span>}
+                                  {evt.pitch !== undefined && evt.pitch !== 0 && <span>PITCH: {evt.pitch > 0 ? `+${evt.pitch}` : evt.pitch}st</span>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}

@@ -22,6 +22,8 @@ export interface TimelineBlock {
   caption?: string;
 }
 
+import { SoundDesignSettings, SoundEvent } from '@/lib/soundDesignCompiler';
+
 export interface EditDNABlueprint {
   editTitle: string;
   viewerEmotion: string;
@@ -35,6 +37,8 @@ export interface EditDNABlueprint {
   soundDirection: string;
   maxQualityPlan: string;
   exportRecommendation: string;
+  soundDesignSettings?: SoundDesignSettings;
+  soundEvents?: SoundEvent[];
 }
 
 export interface Project {

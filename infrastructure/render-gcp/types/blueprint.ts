@@ -11,9 +11,13 @@ export interface TimelineBlock {
   speedRamp?: string;
 }
 
+import { SoundDesignSettings, SoundEvent } from '../soundDesignCompiler';
+
 export interface AudioConfig {
   bpm?: number;
   drop_at?: number;
+  settings?: SoundDesignSettings;
+  events?: SoundEvent[];
 }
 
 export interface ColorGrade {

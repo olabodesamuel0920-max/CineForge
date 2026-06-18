@@ -1,6 +1,7 @@
 import { EditDNABlueprint, TimelineBlock, ProjectDuration, ProjectPlatform } from '@/types/project';
 import { AutoDirectorAnalysis, AutoDirectorShot } from '@/types/autodirector';
 import { STYLE_PRESETS, getPresetById } from './presetsRegistry';
+import { compileSoundDesignPlan, SoundDesignSettings } from './soundDesignCompiler';
 
 // Helper to generate a random ID
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -172,6 +173,27 @@ export function compileAutoDirectorAnalysis(
     ? 'Max Quality Mode: DeepDetail Upscaling engine activated (1080p source -> 4K Cinematic Master). super-fluid optical flow 60fps frame interpolation.'
     : 'Standard 1080p rendering with bicubic scaling.';
 
+  // Determine default music mood based on preset
+  let musicMood = 'luxury_track';
+  if (recommendedPresetId === 'food-crave') musicMood = 'sugar_track';
+  else if (recommendedPresetId === 'salon-transform') musicMood = 'fashion_track';
+  else if (recommendedPresetId === 'sports-stadium') musicMood = 'stadium_track';
+  else if (recommendedPresetId === 'real-estate-showcase') musicMood = 'brand_track';
+  else if (recommendedPresetId === 'boss-entrance') musicMood = 'boss_track';
+  else if (recommendedPresetId === 'luxury-fashion') musicMood = 'fashion_track';
+  else if (recommendedPresetId === 'street-pulse') musicMood = 'street_track';
+  else if (recommendedPresetId === 'product-awakening') musicMood = 'product_track';
+
+  const soundDesignSettings: SoundDesignSettings = {
+    enabled: true,
+    intensity: 'balanced',
+    preserveOriginal: 'auto',
+    musicMood,
+    foleyEnabled: true
+  };
+
+  const soundEvents = compileSoundDesignPlan(blocks, analysis, preset, soundDesignSettings);
+
   return {
     editTitle: `${preset.name} - AutoDirector Blueprint`,
     viewerEmotion: preset.colorGrade || 'Atmospheric Engagement',
@@ -184,6 +206,8 @@ export function compileAutoDirectorAnalysis(
     colorGrade: preset.colorGrade,
     soundDirection: `Audio Profile: ${preset.audioProfile}. Target: ${preset.tagline}.`,
     maxQualityPlan,
-    exportRecommendation: `Format: 9:16 Portrait MP4 | Destination: ${platform} | Estimated Render Time: ${preset.estimatedRenderTime}.`
+    exportRecommendation: `Format: 9:16 Portrait MP4 | Destination: ${platform} | Estimated Render Time: ${preset.estimatedRenderTime}.`,
+    soundDesignSettings,
+    soundEvents
   };
 }

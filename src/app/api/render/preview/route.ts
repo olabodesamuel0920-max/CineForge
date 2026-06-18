@@ -148,6 +148,18 @@ export async function POST(request: Request) {
       sourceVideoGcsUrl,
       blueprint: {
         timeline,
+        audio: {
+          bpm: 120,
+          drop_at: 0,
+          settings: project.blueprint.soundDesignSettings || {
+            enabled: true,
+            intensity: 'balanced',
+            preserveOriginal: 'auto',
+            musicMood: 'luxury_track',
+            foleyEnabled: true
+          },
+          events: project.blueprint.soundEvents || []
+        },
         color_grade: {
           warmth,
           contrast,

@@ -4,10 +4,10 @@
   "description": "CineForge Google Cloud Run video rendering service",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"const fs = require('fs'); fs.copyFileSync('../../src/lib/soundDesignCompiler.ts', './soundDesignCompiler.ts');\" && tsc",
     "start": "node dist/server.js",
-    "dev": "ts-node server.ts",
-    "test:local": "ts-node test-local.ts"
+    "dev": "node -e \"const fs = require('fs'); fs.copyFileSync('../../src/lib/soundDesignCompiler.ts', './soundDesignCompiler.ts');\" && ts-node server.ts",
+    "test:local": "node -e \"const fs = require('fs'); fs.copyFileSync('../../src/lib/soundDesignCompiler.ts', './soundDesignCompiler.ts');\" && ts-node test-local.ts"
   },
   "dependencies": {
     "@google-cloud/firestore": "^7.0.0",
