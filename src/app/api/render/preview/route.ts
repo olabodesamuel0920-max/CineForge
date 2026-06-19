@@ -122,7 +122,7 @@ export async function POST(request: Request) {
     const colorGradeLower = (project.blueprint.colorGrade || '').toLowerCase();
     if (colorGradeLower.includes('gold') || colorGradeLower.includes('warm')) {
       warmth = 1.2;
-    } else if (colorGradeLower.includes('cold') || colorGradeLower.includes('teal')) {
+    } else if (colorGradeLower.includes('cold') || colorGradeLower.includes('teal') || colorGradeLower.includes('cool')) {
       warmth = 0.85;
     }
     
@@ -130,8 +130,8 @@ export async function POST(request: Request) {
       contrast = 1.15;
     }
     
-    if (colorGradeLower.includes('desaturated') || colorGradeLower.includes('editorial')) {
-      saturation = 0.85;
+    if (colorGradeLower.includes('desaturated') || colorGradeLower.includes('editorial') || colorGradeLower.includes('monochrome')) {
+      saturation = 0.35;
     }
 
     // 3. Map export format configurations (forced to libx264 for fast preview)

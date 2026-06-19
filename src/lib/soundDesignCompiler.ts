@@ -228,14 +228,21 @@ export function compileSoundDesignPlan(
   const blockOffsets: { id: string; start: number; duration: number }[] = [];
 
   timelineBlocks.forEach(block => {
-    const parts = block.timestamp.split(' - ');
-    const startSec = parseFloat(parts[0]) || 0;
-    const endSec = parseFloat(parts[1]) || 0;
+    let startSec = 0;
+    let endSec = 0;
+    if (block.timestamp) {
+      const parts = block.timestamp.split(' - ');
+      startSec = parseFloat(parts[0]) || 0;
+      endSec = parseFloat(parts[1]) || 0;
+    } else {
+      startSec = typeof block.start === 'number' ? block.start : 0;
+      endSec = typeof block.end === 'number' ? block.end : 0;
+    }
     const speed = block.speed || 1.0;
     const duration = (endSec - startSec) / speed;
 
     blockOffsets.push({
-      id: block.id,
+      id: block.id || `b-${Math.random().toString(36).substring(2, 9)}`,
       start: totalDuration,
       duration
     });

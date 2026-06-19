@@ -1,19 +1,49 @@
-import fs from 'fs';
-import path from 'path';
+import * as fs from 'fs';
+import * as path from 'path';
 import { compileAutoDirectorAnalysis } from './autodirectorCompiler';
 
 const FRONTEND_URL = 'http://localhost:3000';
 const WORKSPACE_DIR = 'c:/Users/colds/Documents/GitHub/CineForge';
 
-async function runAutoDirectorE2ETest() {
+async function run() {
   console.log('================================================');
-  console.log('STARTING AUTODIRECTOR E2E FLOW TEST');
+  console.log('STARTING REFERENCEDNA E2E FLOW AND RENDER TEST');
   console.log('================================================\n');
 
-  const projectId = 'autodirector-e2e-' + Math.random().toString(36).substring(2, 9);
+  const projectId = 'refdna-e2e-' + Math.random().toString(36).substring(2, 9);
   
-  // Step 1: Inspect raw video asset
-  console.log('[Step 1] Inspecting raw video via Vercel Next.js API...');
+  // Step 1: Analyze Reference Clip to extract style DNA
+  console.log('[Step 1] Analyzing reference video style via Next.js API...');
+  const analyzeResponse = await fetch(`${FRONTEND_URL}/api/referencedna/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Action Rhythms Demo',
+      assetPath: 'gs://cineforge/promo.mp4',
+      projectId
+    })
+  });
+
+  if (!analyzeResponse.ok) {
+    const errText = await analyzeResponse.text();
+    throw new Error(`ReferenceDNA analyze failed (${analyzeResponse.status}): ${errText}`);
+  }
+
+  const analyzeData = await analyzeResponse.json();
+  if (!analyzeData.success || !analyzeData.referenceDna) {
+    throw new Error(`ReferenceDNA response invalid: ${JSON.stringify(analyzeData)}`);
+  }
+
+  const refDna = analyzeData.referenceDna;
+  console.log('[Step 1 Success] ReferenceDNA style profile generated.');
+  console.log(`  Title: ${refDna.title}`);
+  console.log(`  Pacing Rhythm: ${refDna.pacingRhythm.join(', ')}`);
+  console.log(`  Average Shot Duration: ${refDna.averageShotDuration}s`);
+  console.log(`  Dominant Color Grade: ${refDna.dominantColorGrade}`);
+  console.log(`  Caption Placement Style: ${refDna.captionPlacement}`);
+
+  // Step 2: Run AutoDirector inspection for raw footage
+  console.log('\n[Step 2] Inspecting raw video via AutoDirector API...');
   const inspectResponse = await fetch(`${FRONTEND_URL}/api/autodirector/inspect`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -32,36 +62,32 @@ async function runAutoDirectorE2ETest() {
   }
 
   const inspectData = await inspectResponse.json();
-  if (!inspectData.success || !inspectData.analysis) {
-    throw new Error(`Footage inspection response invalid: ${JSON.stringify(inspectData)}`);
-  }
+  console.log('[Step 2 Success] Footage analysis retrieved.');
 
-  console.log('[Step 1 Success] Analysis retrieved.');
-  console.log(`  Niche: ${inspectData.analysis.detectedNiche}`);
-  console.log(`  Usable Duration: ${inspectData.analysis.usableDuration}s`);
-  console.log(`  Composition Blocks: ${inspectData.analysis.compositionSequence.length}`);
-
-  // Step 2: Compile the EditDNA timeline blocks
-  console.log('\n[Step 2] Compiling EditDNA from analysis result...');
+  // Step 3: Compile EditDNA blueprint using ReferenceDNA
+  console.log('\n[Step 3] Compiling EditDNA blueprint with ReferenceDNA pacing overrides...');
   const blueprint = compileAutoDirectorAnalysis(
     projectId,
     inspectData.analysis,
     inspectData.recommendedPreset,
     'YouTube', // platform
     '15s',     // desiredDuration
-    true       // maxQualityMode
+    true,      // maxQualityMode
+    refDna     // referenceDna style overrides
   );
 
-  console.log('[Step 2 Success] EditDNA compiled.');
+  console.log('[Step 3 Success] EditDNA conformed with ReferenceDNA pacing.');
   console.log(`  Title: ${blueprint.editTitle}`);
-  console.log(`  Total Blocks: ${blueprint.timelineBlocks.length}`);
+  console.log(`  Color Grade Applied: ${blueprint.colorGrade}`);
+  console.log(`  Caption Placement Style Applied: ${blueprint.captionStyle}`);
+  console.log(`  Timeline Blocks generated: ${blueprint.timelineBlocks.length}`);
 
-  // Step 3: Enqueue and dispatch the render job
-  console.log('\n[Step 3] Dispatching render job with compiled EditDNA...');
+  // Step 4: Dispatch Render job
+  console.log('\n[Step 4] Dispatching render job for conformed ReferenceDNA timeline...');
   const renderPayload = {
     project: {
       id: projectId,
-      title: 'AutoDirector E2E Test',
+      title: 'ReferenceDNA E2E Render',
       selectedMode: inspectData.recommendedPreset,
       maxQualityMode: true,
       mediaFilename: 'promo.mp4',
@@ -93,13 +119,13 @@ async function runAutoDirectorE2ETest() {
   }
 
   const renderData = await renderResponse.json();
-  console.log('[Step 3 Success] Render job enqueued:', JSON.stringify(renderData));
+  console.log('[Step 4 Success] Render job enqueued:', JSON.stringify(renderData));
 
-  // Step 4: Poll progress
-  console.log('\n[Step 4] Polling render progress...');
+  // Step 5: Poll progress
+  console.log('\n[Step 5] Polling render progress...');
   let completed = false;
   let attempts = 0;
-  const maxAttempts = 400;
+  const maxAttempts = 200;
 
   while (!completed && attempts < maxAttempts) {
     attempts++;
@@ -117,7 +143,7 @@ async function runAutoDirectorE2ETest() {
 
       if (statusData.status === 'completed') {
         completed = true;
-        console.log('[Step 4 Success] Render job finished successfully!');
+        console.log('[Step 5 Success] ReferenceDNA rendering finished successfully!');
       } else if (statusData.status === 'failed') {
         throw new Error(`Render pipeline failed: ${statusData.error}`);
       }
@@ -130,23 +156,23 @@ async function runAutoDirectorE2ETest() {
     throw new Error('Render job timed out.');
   }
 
-  // Step 5: Verify rendered file
-  console.log('\n[Step 5] Verifying rendered file on disk...');
+  // Step 6: Verify rendered output exists on disk
+  console.log('\n[Step 6] Verifying output file on disk...');
   const outputPath = path.join(WORKSPACE_DIR, 'public', 'renders', `output-${projectId}.mp4`);
   if (!fs.existsSync(outputPath)) {
     throw new Error(`Expected output file at: ${outputPath} does not exist.`);
   }
 
   const stats = fs.statSync(outputPath);
-  console.log(`[Step 5 Success] Rendered file verified at: ${outputPath}`);
-  console.log(`[File Metric] Size: ${(stats.size / 1024).toFixed(2)} KB`);
+  console.log(`[Step 6 Success] Rendered ReferenceDNA conformed video verified at: ${outputPath}`);
+  console.log(`[File Metric] Size: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
 
   console.log('\n================================================');
-  console.log('🎉 AUTODIRECTOR E2E FLOW TEST COMPLETED SUCCESSFULLY!');
+  console.log('🎉 REFERENCEDNA E2E RENDER TEST SUCCESSFUL!');
   console.log('================================================');
 }
 
-runAutoDirectorE2ETest().catch(err => {
-  console.error('\n❌ E2E FLOW TEST FAILED:', err.message);
+run().catch(err => {
+  console.error('\n❌ REFERENCEDNA E2E TEST FAILED:', err.message);
   process.exit(1);
 });

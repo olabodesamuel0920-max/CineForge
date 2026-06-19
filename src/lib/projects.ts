@@ -6,6 +6,7 @@ import {
   deleteLocalProject
 } from './storage';
 import { Project, CreateProjectInput, PlatformStatus, ProjectDuration, ProjectPlatform, EditDNABlueprint, ProjectVersion, BrandPreset } from '@/types/project';
+import { ReferenceDna } from '@/types/autodirector';
 import { generateEditDNABlueprint } from './blueprints';
 import { parseSoundDirection, serializeSoundDirection } from './soundDesignCompiler';
 
@@ -690,3 +691,157 @@ export async function deleteBrandPreset(presetId: string): Promise<void> {
     return deleteLocalBrandPreset(presetId);
   }
 }
+
+// --- ReferenceDNA Database & Local Helpers ---
+
+function mapDbToReferenceDna(data: any): ReferenceDna {
+  return {
+    id: data.id,
+    userId: data.user_id,
+    title: data.title,
+    sourceFilename: data.source_filename,
+    pacingRhythm: data.pacing_rhythm || [],
+    averageShotDuration: data.average_shot_duration,
+    dominantColorGrade: data.dominant_color_grade,
+    captionPlacement: data.caption_placement,
+    soundtrackBeatIntervals: data.soundtrack_beat_intervals || [],
+    transitionStyles: data.transition_styles || [],
+    createdAt: data.created_at
+  };
+}
+
+function getLocalReferenceDnas(): ReferenceDna[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const data = localStorage.getItem('cf_reference_dnas');
+    if (!data) return [];
+    return JSON.parse(data) || [];
+  } catch (e) {
+    console.error('Failed to load local reference DNAs:', e);
+    return [];
+  }
+}
+
+function saveLocalReferenceDna(dnaData: Omit<ReferenceDna, 'id' | 'createdAt'>): ReferenceDna {
+  const localList = getLocalReferenceDnas();
+  const newDna: ReferenceDna = {
+    ...dnaData,
+    id: `guest-dna-${Math.random().toString(36).substring(2, 9)}`,
+    createdAt: new Date().toISOString()
+  };
+
+  if (typeof window !== 'undefined') {
+    try {
+      localList.unshift(newDna);
+      localStorage.setItem('cf_reference_dnas', JSON.stringify(localList));
+    } catch (e) {
+      console.error('Failed to save reference DNA to localStorage:', e);
+    }
+  }
+
+  return newDna;
+}
+
+function deleteLocalReferenceDna(dnaId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const list = getLocalReferenceDnas();
+    const filtered = list.filter(dna => dna.id !== dnaId);
+    localStorage.setItem('cf_reference_dnas', JSON.stringify(filtered));
+  } catch (e) {
+    console.error('Failed to delete reference DNA from localStorage:', e);
+  }
+}
+
+export async function getReferenceDnas(): Promise<ReferenceDna[]> {
+  const user = await getActiveUser();
+  if (!user) {
+    return getLocalReferenceDnas();
+  }
+  const client = getSupabase();
+  if (!client) {
+    return getLocalReferenceDnas();
+  }
+  try {
+    const { data, error } = await client
+      .from('reference_dnas')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Failed to fetch reference DNAs:', error.message);
+      return getLocalReferenceDnas();
+    }
+
+    return (data || []).map(mapDbToReferenceDna);
+  } catch (e) {
+    console.warn('Supabase getReferenceDnas failed, falling back to local storage.', e);
+    return getLocalReferenceDnas();
+  }
+}
+
+export async function saveReferenceDna(dnaData: Omit<ReferenceDna, 'id' | 'createdAt'>): Promise<ReferenceDna> {
+  const user = await getActiveUser();
+  if (!user) {
+    return saveLocalReferenceDna(dnaData);
+  }
+  const client = getSupabase();
+  if (!client) {
+    return saveLocalReferenceDna(dnaData);
+  }
+  try {
+    const { data, error } = await client
+      .from('reference_dnas')
+      .insert({
+        user_id: user.id,
+        title: dnaData.title,
+        source_filename: dnaData.sourceFilename,
+        pacing_rhythm: dnaData.pacingRhythm,
+        average_shot_duration: dnaData.averageShotDuration,
+        dominant_color_grade: dnaData.dominantColorGrade,
+        caption_placement: dnaData.captionPlacement,
+        soundtrack_beat_intervals: dnaData.soundtrackBeatIntervals || [],
+        transition_styles: dnaData.transitionStyles || []
+      })
+      .select()
+      .single();
+
+    if (error || !data) {
+      console.error('Failed to create reference DNA:', error?.message);
+      throw error || new Error('Failed to create reference DNA.');
+    }
+
+    return mapDbToReferenceDna(data);
+  } catch (e) {
+    console.warn('Supabase saveReferenceDna failed, falling back to local storage.', e);
+    return saveLocalReferenceDna(dnaData);
+  }
+}
+
+export async function deleteReferenceDna(dnaId: string): Promise<void> {
+  const user = await getActiveUser();
+  if (!user) {
+    return deleteLocalReferenceDna(dnaId);
+  }
+  const client = getSupabase();
+  if (!client) {
+    return deleteLocalReferenceDna(dnaId);
+  }
+  try {
+    const { error } = await client
+      .from('reference_dnas')
+      .delete()
+      .eq('id', dnaId)
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.error('Failed to delete reference DNA:', error.message);
+      throw error;
+    }
+  } catch (e) {
+    console.warn('Supabase deleteReferenceDna failed, deleting locally instead.', e);
+    return deleteLocalReferenceDna(dnaId);
+  }
+}
+

@@ -52,3 +52,4 @@ infrastructure/render-gcp/output_no_text.mp4
 infrastructure/render-gcp/test_log.txt
 test_qsv.mp4
 test_qsv_hevc.mp4
+infrastructure/render-gcp/tmp/

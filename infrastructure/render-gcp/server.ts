@@ -1524,15 +1524,159 @@ app.post('/autodirector/inspect', authMiddleware, async (req: Request, res: Resp
   } catch (err) {
     console.error('[AutoDirector Worker] Inspection failed:', err);
     return res.status(500).json({ error: `Inspection pipeline failed: ${(err as Error).message}` });
+  }
+});
+
+// HTTP POST /referencedna/inspect route handler
+app.post('/referencedna/inspect', authMiddleware, async (req: Request, res: Response) => {
+  const { title, assetPath, maxAnalyzeSeconds } = req.body;
+
+  if (!assetPath) {
+    return res.status(400).json({ error: 'Missing assetPath parameter.' });
+  }
+
+  const limitSeconds = maxAnalyzeSeconds || 60;
+  const tempDir = path.join(__dirname, 'tmp', `refdna-${Date.now()}`);
+  const localInputPath = path.join(tempDir, `input_ref.mp4`);
+
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    // 1. Download/access the reference clip
+    console.log(`[ReferenceDNA Worker] Accessing/downloading reference video: ${assetPath}`);
+    await downloadFromGcs(assetPath, localInputPath);
+
+    if (!fs.existsSync(localInputPath)) {
+      throw new Error(`Failed to access input file at: ${localInputPath}`);
+    }
+
+    // 2. Run ffprobe analysis
+    console.log(`[ReferenceDNA Worker] Running ffprobe inspection on: ${localInputPath}`);
+    const ffprobeCmd = getFfprobeCommand();
+    const ffprobeOutput = execSync(
+      `"${ffprobeCmd}" -v error -show_entries format=duration -of json=c=1 "${localInputPath}"`,
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    );
+    const metadata = JSON.parse(ffprobeOutput);
+    const duration = parseFloat(metadata.format?.duration || '15');
+    const cappedDuration = Math.min(duration, limitSeconds);
+
+    // 3. Run scene change detection using FFmpeg select showinfo
+    console.log(`[ReferenceDNA Worker] Running scene change detection (limit: ${cappedDuration}s)`);
+    const ffmpegCmd = getFfmpegCommand();
+    
+    // We run FFmpeg capturing stderr (where showinfo prints logs)
+    const result = spawnSync(ffmpegCmd, [
+      '-t', cappedDuration.toFixed(3),
+      '-i', localInputPath,
+      '-vf', "select='gt(scene,0.4)',showinfo",
+      '-f', 'null',
+      '-'
+    ], { encoding: 'utf8' });
+
+    const cutTimestamps: number[] = [0];
+    if (result.stderr) {
+      const lines = result.stderr.split('\n');
+      lines.forEach(line => {
+        if (line.includes('showinfo') && line.includes('pts_time:')) {
+          const match = line.match(/pts_time:([\d\.]+)/);
+          if (match) {
+            const ts = parseFloat(match[1]);
+            if (ts > 0 && ts < cappedDuration) {
+              cutTimestamps.push(ts);
+            }
+          }
+        }
+      });
+    }
+
+    // Remove duplicates and sort
+    const uniqueCuts = Array.from(new Set(cutTimestamps)).sort((a, b) => a - b);
+    uniqueCuts.push(cappedDuration);
+
+    // Compute pacing rhythm and average shot duration
+    const pacingRhythm: string[] = [];
+    for (let i = 0; i < uniqueCuts.length - 1; i++) {
+      const diff = uniqueCuts[i + 1] - uniqueCuts[i];
+      pacingRhythm.push(`${diff.toFixed(1)}s`);
+    }
+
+    const averageShotDuration = pacingRhythm.length > 0 
+      ? cappedDuration / pacingRhythm.length 
+      : cappedDuration;
+
+    // 4. Heuristic color mood analysis
+    console.log(`[ReferenceDNA Worker] Running RGB color balance heuristics`);
+    let dominantColorGrade = 'Neutral Balanced';
+    try {
+      const samplePoints = [cappedDuration * 0.25, cappedDuration * 0.5, cappedDuration * 0.75];
+      let totalR = 0, totalG = 0, totalB = 0;
+      let validSamples = 0;
+
+      for (const t of samplePoints) {
+        const colorResult = spawnSync(ffmpegCmd, [
+          '-ss', t.toFixed(3),
+          '-i', localInputPath,
+          '-vf', 'scale=1:1',
+          '-f', 'rawvideo',
+          '-pix_fmt', 'rgb24',
+          '-vframes', '1',
+          '-'
+        ]);
+
+        if (colorResult.status === 0 && colorResult.stdout.length >= 3) {
+          totalR += colorResult.stdout[0];
+          totalG += colorResult.stdout[1];
+          totalB += colorResult.stdout[2];
+          validSamples++;
+        }
+      }
+
+      if (validSamples > 0) {
+        const r = totalR / validSamples;
+        const g = totalG / validSamples;
+        const b = totalB / validSamples;
+        console.log(`[ReferenceDNA Worker] Average RGB: R=${r.toFixed(1)}, G=${g.toFixed(1)}, B=${b.toFixed(1)}`);
+        
+        if (r > b + 15 && r > g + 5) {
+          dominantColorGrade = 'Warm Cinematic';
+        } else if (b > r + 15) {
+          dominantColorGrade = 'Cool Cyberpunk';
+        } else if (Math.abs(r - g) < 12 && Math.abs(g - b) < 12) {
+          dominantColorGrade = 'Sleek Monochrome';
+        } else {
+          dominantColorGrade = 'Neutral Balanced';
+        }
+      }
+    } catch (colorErr) {
+      console.warn('[ReferenceDNA Worker] Color analysis failed, using fallback:', colorErr);
+    }
+
+    const transitionStyles = averageShotDuration < 2.2 ? ['cut'] : ['cut', 'fade'];
+
+    return res.status(200).json({
+      success: true,
+      title: title || 'Unnamed Reference Style',
+      sourceFilename: path.basename(assetPath),
+      pacingRhythm,
+      averageShotDuration: parseFloat(averageShotDuration.toFixed(2)),
+      dominantColorGrade,
+      captionPlacement: averageShotDuration < 2.0 ? 'center_pulsing' : 'bottom_subtitle',
+      transitionStyles
+    });
+
+  } catch (err) {
+    console.error('[ReferenceDNA Worker] Style inspection failed:', err);
+    return res.status(500).json({ error: `Style inspection pipeline failed: ${(err as Error).message}` });
   } finally {
     // Delete temp folder
     try {
       if (fs.existsSync(tempDir)) {
         fs.rmSync(tempDir, { recursive: true, force: true });
-        console.log(`[AutoDirector Worker] Cleaned up temp workspace: ${tempDir}`);
+        console.log(`[ReferenceDNA Worker] Cleaned up temp workspace: ${tempDir}`);
       }
     } catch (e) {
-      console.warn('[AutoDirector Worker] Temp folder cleanup failed:', e);
+      console.warn('[ReferenceDNA Worker] Temp folder cleanup failed:', e);
     }
   }
 });

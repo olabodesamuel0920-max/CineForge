@@ -4,8 +4,9 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Project, TimelineBlock } from '@/types/project';
-import { getProjectById, getActiveUser, updateProject, getProjectVersions, getBrandPresets, createBrandPreset, deleteBrandPreset, createProjectVersion } from '@/lib/projects';
+import { getProjectById, getActiveUser, updateProject, getProjectVersions, getBrandPresets, createBrandPreset, deleteBrandPreset, createProjectVersion, getReferenceDnas, saveReferenceDna, deleteReferenceDna } from '@/lib/projects';
 import { ProjectVersion, BrandPreset } from '@/types/project';
+import { ReferenceDna } from '@/types/autodirector';
 import { compileAutoDirectorAnalysis } from '@/lib/autodirectorCompiler';
 import { compileSoundDesignPlan, AUDIO_ASSETS, SoundDesignSettings, SoundEvent } from '@/lib/soundDesignCompiler';
 import { getModeById } from '@/lib/cineforgeModes';
@@ -45,6 +46,10 @@ export default function ProjectDetailPage() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isInspectorExpanded, setIsInspectorExpanded] = useState(true);
   const [isSoundPanelExpanded, setIsSoundPanelExpanded] = useState(true);
+  const [mimicMode, setMimicMode] = useState<'preset' | 'reference'>('preset');
+  const [referenceDnas, setReferenceDnas] = useState<ReferenceDna[]>([]);
+  const [selectedReferenceDnaId, setSelectedReferenceDnaId] = useState<string | null>(null);
+  const [isAnalyzingReference, setIsAnalyzingReference] = useState(false);
 
   const soundSettings: SoundDesignSettings = project?.blueprint?.soundDesignSettings || {
     enabled: true,
@@ -62,6 +67,11 @@ export default function ProjectDetailPage() {
       setVersions(vers);
       const prs = await getBrandPresets();
       setBrandPresets(prs);
+      const dnas = await getReferenceDnas();
+      setReferenceDnas(dnas);
+      if (dnas.length > 0 && !selectedReferenceDnaId) {
+        setSelectedReferenceDnaId(dnas[0].id);
+      }
     } catch (err) {
       console.error('Failed to load versions/presets:', err);
     }
@@ -272,6 +282,133 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const handleUploadReferenceDna = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 50 * 1024 * 1024) {
+      alert("Reference file exceeds the 50MB limit for style analysis.");
+      return;
+    }
+
+    const titleInput = prompt("Enter a name for this reference style:", file.name.replace(/\.[^/.]+$/, ""));
+    if (!titleInput) return;
+
+    setIsAnalyzingReference(true);
+
+    try {
+      const negotiateResponse = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          contentType: file.type,
+          fileSize: file.size
+        })
+      });
+
+      const negotiateData = await negotiateResponse.json();
+      if (!negotiateResponse.ok) {
+        throw new Error(negotiateData.error || 'Negotiation failed.');
+      }
+
+      const { mode, uploadUrl, filePath } = negotiateData;
+
+      const xhr = new XMLHttpRequest();
+      const uploadPromise = new Promise<void>((resolve, reject) => {
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`Upload failed with status ${xhr.status}`));
+        });
+        xhr.addEventListener('error', () => reject(new Error('Network error during upload.')));
+      });
+
+      if (mode === 'local') {
+        xhr.open('POST', uploadUrl);
+        const form = new FormData();
+        form.append('file', file);
+        form.append('fileName', negotiateData.fileName);
+        xhr.send(form);
+      } else {
+        xhr.open('PUT', uploadUrl);
+        xhr.setRequestHeader('Content-Type', file.type);
+        xhr.send(file);
+      }
+
+      await uploadPromise;
+
+      let token = '';
+      const client = getSupabase();
+      if (client) {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          token = session.access_token;
+        }
+      }
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const analyzeResponse = await fetch('/api/referencedna/analyze', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          title: titleInput,
+          assetPath: filePath,
+          projectId: project?.id
+        })
+      });
+
+      const analyzeData = await analyzeResponse.json();
+      if (!analyzeResponse.ok) {
+        throw new Error(analyzeData.error || 'Analysis failed.');
+      }
+
+      let newDna = analyzeData.referenceDna;
+      if (analyzeData.guest) {
+        const guestList = [newDna, ...referenceDnas];
+        setReferenceDnas(guestList);
+        localStorage.setItem('cf_reference_dnas', JSON.stringify(guestList));
+      } else {
+        const list = await getReferenceDnas();
+        setReferenceDnas(list);
+      }
+
+      setSelectedReferenceDnaId(newDna.id);
+      alert(`ReferenceDNA style "${titleInput}" analyzed and saved successfully!`);
+    } catch (err) {
+      console.error('ReferenceDNA upload/analyze failed:', err);
+      alert(`Style mimic failed: ${(err as Error).message}`);
+    } finally {
+      setIsAnalyzingReference(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleDeleteReferenceDna = async (dnaId: string, name: string) => {
+    const confirmDelete = confirm(`Are you sure you want to delete the reference style "${name}"?`);
+    if (!confirmDelete) return;
+
+    try {
+      await deleteReferenceDna(dnaId);
+      const updatedList = referenceDnas.filter(dna => dna.id !== dnaId);
+      setReferenceDnas(updatedList);
+      
+      if (selectedReferenceDnaId === dnaId) {
+        setSelectedReferenceDnaId(updatedList[0]?.id || null);
+      }
+      
+      alert(`Reference style "${name}" deleted.`);
+    } catch (err) {
+      console.error('Failed to delete reference style:', err);
+      alert(`Delete failed: ${(err as Error).message}`);
+    }
+  };
+
   const handleGenerateEditDNA = async () => {
     if (!project || !analysisResult || !analysisResult.analysis) return;
 
@@ -299,21 +436,25 @@ export default function ProjectDetailPage() {
           }
         });
         
-        // Reload versions list
         const vers = await getProjectVersions(project.id);
         setVersions(vers);
       } catch (err) {
         console.warn('Failed to auto-save backup version snapshot:', err);
       }
 
-      // 2. Compile new EditDNA blueprint from the analysis result
+      // 2. Compile new EditDNA blueprint from the analysis result (passing selected ReferenceDNA if mimic mode is reference)
+      const selectedDna = mimicMode === 'reference'
+        ? referenceDnas.find(d => d.id === selectedReferenceDnaId)
+        : undefined;
+
       const compiledBlueprint = compileAutoDirectorAnalysis(
         project.id,
         analysisResult.analysis,
         analysisResult.recommendedPreset,
         project.platform,
         project.duration,
-        project.maxQualityMode
+        project.maxQualityMode,
+        selectedDna
       );
 
       // 3. Update project state
@@ -326,7 +467,6 @@ export default function ProjectDetailPage() {
       setProject(updatedProject);
       setSaveStatus('unsaved');
       
-      // Success alert
       alert("AutoDirector blueprint generated from raw footage.");
     } catch (err) {
       console.error('Failed to compile AutoDirector EditDNA:', err);
@@ -699,6 +839,116 @@ export default function ProjectDetailPage() {
                             </div>
                           ))}
                         </div>
+                      </div>
+
+                      {/* Style Mimic Mode */}
+                      <div className="flex flex-col gap-2 border-t border-white/5 pt-3">
+                        <span className="text-[8px] text-gray-500 uppercase font-bold">Timeline Generation Style</span>
+                        
+                        <div className="grid grid-cols-2 gap-2 bg-black/20 p-1 rounded border border-white/5">
+                          <button
+                            onClick={() => setMimicMode('preset')}
+                            className={`py-1 rounded text-[9px] font-mono font-bold uppercase transition-all cursor-pointer ${
+                              mimicMode === 'preset'
+                                ? 'bg-brand-cyan/20 text-brand-cyan border border-brand-cyan/20'
+                                : 'text-gray-500 hover:text-gray-300'
+                            }`}
+                          >
+                            Preset Style
+                          </button>
+                          <button
+                            onClick={() => setMimicMode('reference')}
+                            className={`py-1 rounded text-[9px] font-mono font-bold uppercase transition-all cursor-pointer ${
+                              mimicMode === 'reference'
+                                ? 'bg-brand-cyan/20 text-brand-cyan border border-brand-cyan/20'
+                                : 'text-gray-500 hover:text-gray-300'
+                            }`}
+                          >
+                            Mimic Video
+                          </button>
+                        </div>
+
+                        {mimicMode === 'reference' && (
+                          <div className="flex flex-col gap-2 bg-white/[0.01] border border-white/5 rounded p-2.5 mt-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] text-gray-400 font-mono">Reference Style:</span>
+                              {referenceDnas.length > 0 && selectedReferenceDnaId && (
+                                <button
+                                  onClick={() => {
+                                    const selected = referenceDnas.find(d => d.id === selectedReferenceDnaId);
+                                    if (selected) handleDeleteReferenceDna(selected.id, selected.title);
+                                  }}
+                                  className="text-[8px] text-brand-magenta hover:text-brand-magenta/80 font-bold uppercase tracking-wider font-mono cursor-pointer"
+                                >
+                                  Delete Style
+                                </button>
+                              )}
+                            </div>
+
+                            {referenceDnas.length > 0 ? (
+                              <select
+                                value={selectedReferenceDnaId || ''}
+                                onChange={(e) => setSelectedReferenceDnaId(e.target.value)}
+                                className="w-full bg-black/40 border border-white/10 rounded px-2.5 py-1 text-gray-200 text-[10px] focus:outline-none"
+                              >
+                                {referenceDnas.map((dna) => (
+                                  <option key={dna.id} value={dna.id}>
+                                    {dna.title} ({dna.averageShotDuration}s avg / {dna.dominantColorGrade})
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="text-[9px] text-gray-500 italic py-1">No reference styles saved.</div>
+                            )}
+
+                            {/* Upload Reference Video */}
+                            <div className="flex items-center justify-between gap-2 mt-1">
+                              <input
+                                type="file"
+                                accept="video/*"
+                                onChange={handleUploadReferenceDna}
+                                className="hidden"
+                                id="ref-dna-upload-input"
+                                disabled={isAnalyzingReference}
+                              />
+                              <label
+                                htmlFor="ref-dna-upload-input"
+                                className={`px-2.5 py-1 text-[9px] font-mono text-gray-300 font-bold hover:bg-white/10 cursor-pointer rounded border border-white/10 flex items-center justify-center gap-1.5 transition-all w-full text-center ${
+                                  isAnalyzingReference ? 'opacity-50 pointer-events-none' : 'bg-white/5'
+                                }`}
+                              >
+                                {isAnalyzingReference ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin text-brand-cyan" /> Analyzing Reference...
+                                  </>
+                                ) : (
+                                  <>Upload & Analyze Reference Clip</>
+                                )}
+                              </label>
+                            </div>
+
+                            {/* Pacing rhythm details */}
+                            {selectedReferenceDnaId && (
+                              (() => {
+                                const selected = referenceDnas.find(d => d.id === selectedReferenceDnaId);
+                                if (!selected) return null;
+                                return (
+                                  <div className="text-[8px] font-mono text-gray-500 flex flex-col gap-1 border-t border-white/5 pt-1.5 mt-1">
+                                    <div>RHYTHM: {selected.pacingRhythm?.join(', ') || 'No cuts'}</div>
+                                    <div>COLOR MOOD: {selected.dominantColorGrade || 'Neutral'}</div>
+                                    <div>TEXT PLACE: {selected.captionPlacement || 'center'}</div>
+                                    <div className="text-[9px] text-brand-cyan/80 font-bold">✓ Using ReferenceDNA pacing</div>
+                                  </div>
+                                );
+                              })()
+                            )}
+
+                            {/* Safety Notice */}
+                            <p className="text-[8px] text-gray-500 leading-normal border-t border-white/5 pt-1.5 mt-0.5">
+                              ⚠️ ReferenceDNA learns pacing and edit structure only. It does not copy copyrighted assets, logos, watermarks, or music.
+                            </p>
+                          </div>
+                        )}
                       </div>
 
                       {/* Action Button */}

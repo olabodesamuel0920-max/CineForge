@@ -89,3 +89,35 @@ CREATE POLICY "Users can manage their own brand presets"
 ON public.brand_presets FOR ALL TO authenticated 
 USING (auth.uid() = user_id) 
 WITH CHECK (auth.uid() = user_id);
+
+
+-- ==========================================
+-- 3. ReferenceDNA Library
+-- ==========================================
+
+CREATE TABLE IF NOT EXISTS public.reference_dnas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  source_filename TEXT NOT NULL,
+  pacing_rhythm TEXT[] NOT NULL, -- Array of shot duration strings, e.g. {'1.5s', '0.8s'}
+  average_shot_duration REAL NOT NULL,
+  dominant_color_grade TEXT,
+  caption_placement TEXT NOT NULL DEFAULT 'center_pulsing',
+  soundtrack_beat_intervals REAL[],
+  transition_styles TEXT[],
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Index for user lookup optimization
+CREATE INDEX IF NOT EXISTS idx_reference_dnas_user_id ON public.reference_dnas(user_id);
+
+-- Enable Row Level Security
+ALTER TABLE public.reference_dnas ENABLE ROW LEVEL SECURITY;
+
+-- Explicit RLS Policies for reference_dnas
+CREATE POLICY "Users can manage their own ReferenceDNAs" 
+ON public.reference_dnas FOR ALL TO authenticated 
+USING (auth.uid() = user_id) 
+WITH CHECK (auth.uid() = user_id);
+

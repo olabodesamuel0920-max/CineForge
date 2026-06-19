@@ -1,5 +1,5 @@
 import { EditDNABlueprint, TimelineBlock, ProjectDuration, ProjectPlatform } from '@/types/project';
-import { AutoDirectorAnalysis, AutoDirectorShot } from '@/types/autodirector';
+import { AutoDirectorAnalysis, AutoDirectorShot, ReferenceDna } from '@/types/autodirector';
 import { STYLE_PRESETS, getPresetById } from './presetsRegistry';
 import { compileSoundDesignPlan, SoundDesignSettings } from './soundDesignCompiler';
 
@@ -12,7 +12,8 @@ export function compileAutoDirectorAnalysis(
   recommendedPresetId: string,
   platform: ProjectPlatform,
   desiredDuration: ProjectDuration,
-  maxQualityMode: boolean
+  maxQualityMode: boolean,
+  referenceDna?: ReferenceDna
 ): EditDNABlueprint {
   // 1. Retrieve the preset configuration
   const preset = getPresetById(recommendedPresetId) || STYLE_PRESETS[0];
@@ -27,18 +28,47 @@ export function compileAutoDirectorAnalysis(
   let numBlocks = 4;
   let splitRatios: number[] = []; // Cumulative ratios of targetDuration
   
-  if (targetDuration <= 5) {
-    numBlocks = 2;
-    splitRatios = [0.3, 1.0]; // Hook gets 30%, Climax gets 70%
-  } else if (targetDuration <= 10) {
-    numBlocks = 3;
-    splitRatios = [0.2, 0.7, 1.0]; // Hook: 20%, Detail: 50%, Climax: 30%
-  } else if (targetDuration <= 15) {
-    numBlocks = 4;
-    splitRatios = [0.2, 0.5, 0.8, 1.0]; // Hook: 20%, Detail: 30%, Climax: 30%, Outro: 20%
+  if (referenceDna && referenceDna.pacingRhythm && referenceDna.pacingRhythm.length > 0) {
+    const parsedDurs = referenceDna.pacingRhythm.map(p => parseFloat(p) || 2.0);
+    const totalParsed = parsedDurs.reduce((a, b) => a + b, 0);
+    
+    // Scale each duration to fit the target duration exactly
+    const scaleFactor = totalParsed > 0 ? targetDuration / totalParsed : 1.0;
+    
+    const blockDurations = parsedDurs.map(d => {
+      const scaled = d * scaleFactor;
+      return Math.max(scaled, 0.5); // min block duration 0.5s (Timeline OS validation)
+    });
+    
+    // Re-normalize sum after min duration enforcement to snap exactly to targetDuration
+    const newTotal = blockDurations.reduce((a, b) => a + b, 0);
+    const normalizedDurs = blockDurations.map(d => parseFloat((d * (targetDuration / newTotal)).toFixed(2)));
+    
+    numBlocks = normalizedDurs.length;
+    
+    let accum = 0;
+    splitRatios = [];
+    for (let i = 0; i < numBlocks; i++) {
+      accum += normalizedDurs[i];
+      splitRatios.push(accum / targetDuration);
+    }
+    if (splitRatios.length > 0) {
+      splitRatios[splitRatios.length - 1] = 1.0; // snap last block to 1.0
+    }
   } else {
-    numBlocks = 5;
-    splitRatios = [0.15, 0.4, 0.65, 0.85, 1.0]; // Hook: 15%, Details: 50%, Climax: 20%, Outro: 15%
+    if (targetDuration <= 5) {
+      numBlocks = 2;
+      splitRatios = [0.3, 1.0]; // Hook gets 30%, Climax gets 70%
+    } else if (targetDuration <= 10) {
+      numBlocks = 3;
+      splitRatios = [0.2, 0.7, 1.0]; // Hook: 20%, Detail: 50%, Climax: 30%
+    } else if (targetDuration <= 15) {
+      numBlocks = 4;
+      splitRatios = [0.2, 0.5, 0.8, 1.0]; // Hook: 20%, Detail: 30%, Climax: 30%, Outro: 20%
+    } else {
+      numBlocks = 5;
+      splitRatios = [0.15, 0.4, 0.65, 0.85, 1.0]; // Hook: 15%, Details: 50%, Climax: 20%, Outro: 15%
+    }
   }
 
   // 4. Select the best segments from compositionSequence based on usableScore
@@ -194,16 +224,21 @@ export function compileAutoDirectorAnalysis(
 
   const soundEvents = compileSoundDesignPlan(blocks, analysis, preset, soundDesignSettings);
 
+  const finalColorGrade = referenceDna?.dominantColorGrade || preset.colorGrade || 'Atmospheric Engagement';
+  const finalCaptionStyle = referenceDna?.captionPlacement
+    ? `ReferenceDNA placement: ${referenceDna.captionPlacement}`
+    : `Clean safe-zone subtitles matching the ${preset.name} theme.`;
+
   return {
-    editTitle: `${preset.name} - AutoDirector Blueprint`,
-    viewerEmotion: preset.colorGrade || 'Atmospheric Engagement',
+    editTitle: referenceDna ? `${preset.name} (Mimic: ${referenceDna.title}) - AutoDirector Blueprint` : `${preset.name} - AutoDirector Blueprint`,
+    viewerEmotion: finalColorGrade,
     hookStrategy: `Start with a 1.5s visual hook. ${blocks[0]?.visualCue || 'Establish scene immediately.'}`,
     timelineBlocks: blocks,
-    cutRhythm: preset.visualSignature || 'Dynamic cut rhythms synced to transitions.',
+    cutRhythm: referenceDna ? `ReferenceDNA pacing pattern (${referenceDna.pacingRhythm.join(', ')})` : (preset.visualSignature || 'Dynamic cut rhythms synced to transitions.'),
     speedRampPlan: preset.visualSignature || 'Pacing adjustments mapping to raw action intensity.',
     vfxDirection: `Visual Signature: ${preset.visualSignature}. Quality status: Sharp. Clean layout.`,
-    captionStyle: `Clean safe-zone subtitles matching the ${preset.name} theme.`,
-    colorGrade: preset.colorGrade,
+    captionStyle: finalCaptionStyle,
+    colorGrade: finalColorGrade,
     soundDirection: `Audio Profile: ${preset.audioProfile}. Target: ${preset.tagline}.`,
     maxQualityPlan,
     exportRecommendation: `Format: 9:16 Portrait MP4 | Destination: ${platform} | Estimated Render Time: ${preset.estimatedRenderTime}.`,
