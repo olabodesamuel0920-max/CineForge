@@ -31,6 +31,25 @@ export interface RenderJob {
     videoDuration?: number;
     resolution?: [number, number];
     codec?: string;
+    qualityDiagnostics?: {
+      before?: {
+        resolution: string;
+        fps: number;
+        bitrateKbps: number;
+        noiseScore: number;
+        shakeScore: number;
+        blurScore: number;
+      };
+      after?: {
+        resolution: string;
+        fps: number;
+        bitrateKbps: number;
+        noiseScore: number;
+        shakeScore: number;
+        blurScore: number;
+      };
+      enhancementsApplied?: string[];
+    };
   };
   resolve?: (value: any) => void;
   reject?: (reason: any) => void;

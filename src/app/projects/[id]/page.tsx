@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Project, TimelineBlock } from '@/types/project';
+import { Project, TimelineBlock, MaxQualitySettings } from '@/types/project';
 import { getProjectById, getActiveUser, updateProject, getProjectVersions, getBrandPresets, createBrandPreset, deleteBrandPreset, createProjectVersion, getReferenceDnas, saveReferenceDna, deleteReferenceDna } from '@/lib/projects';
 import { ProjectVersion, BrandPreset } from '@/types/project';
 import { ReferenceDna } from '@/types/autodirector';
@@ -18,6 +18,7 @@ import BlueprintTimeline from '@/components/BlueprintTimeline';
 import StatusTracker from '@/components/StatusTracker';
 import RenderQueuePanel from '@/components/RenderQueuePanel';
 import RightsSafetyNotice from '@/components/RightsSafetyNotice';
+import MaxQualitySettingsPanel from '@/components/MaxQualitySettingsPanel';
 import { 
   ArrowLeft, Cpu, Sparkles, Film, Eye, 
   Volume2, Palette, FileText, ClipboardCheck, Clipboard, ExternalLink, CloudRain,
@@ -508,6 +509,18 @@ export default function ProjectDetailPage() {
     setSaveStatus('unsaved');
   };
 
+  const handleMaxQualitySettingsChange = (newSettings: MaxQualitySettings) => {
+    if (!project) return;
+    setProject({
+      ...project,
+      blueprint: {
+        ...project.blueprint,
+        maxQualitySettings: newSettings
+      }
+    });
+    setSaveStatus('unsaved');
+  };
+
   const handleUpgradeRedirect = async () => {
     setIsRedirecting(true);
     try {
@@ -963,6 +976,12 @@ export default function ProjectDetailPage() {
                 </div>
               )}
             </div>
+
+            {/* MaxQuality Settings Panel */}
+            <MaxQualitySettingsPanel
+              blueprint={project.blueprint}
+              onChange={handleMaxQualitySettingsChange}
+            />
 
             {/* Cinematic Sound Design Panel */}
             <div className="glass-panel rounded-xl p-5 border border-white/5 bg-space-card/40 flex flex-col gap-3">

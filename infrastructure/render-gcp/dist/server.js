@@ -47,6 +47,7 @@ const firestore_1 = require("./firestore");
 const audioAnalysis_1 = require("./audioAnalysis");
 const queue_1 = require("./queue");
 const soundDesignCompiler_1 = require("./soundDesignCompiler");
+const qualityAnalyzer_1 = require("./qualityAnalyzer");
 if (process.env.RENDER_MODE !== 'cloud') {
     process.env.RENDER_MODE = 'local';
 }
@@ -156,6 +157,14 @@ const audioConfigSchema = zod_1.z.object({
     settings: soundDesignSettingsSchema.optional(),
     events: zod_1.z.array(soundEventSchema).optional()
 });
+const maxQualitySettingsSchema = zod_1.z.object({
+    stabilization: zod_1.z.boolean(),
+    denoise: zod_1.z.boolean(),
+    sharpen: zod_1.z.boolean(),
+    colorRecovery: zod_1.z.boolean(),
+    upscaleFactor: zod_1.z.enum(['none', '2x', '4x']),
+    resolution: zod_1.z.enum(['720p', '1080p', '4K'])
+});
 const blueprintSchema = zod_1.z.object({
     timeline: zod_1.z.array(timelineBlockSchema).nonempty('Timeline blocks cannot be empty'),
     audio: audioConfigSchema.optional(),
@@ -171,7 +180,8 @@ const blueprintSchema = zod_1.z.object({
     }).optional(),
     selected_mode: zod_1.z.string().optional(),
     viewer_emotion: zod_1.z.string().optional(),
-    hook_intensity: zod_1.z.number().optional()
+    hook_intensity: zod_1.z.number().optional(),
+    max_quality_settings: maxQualitySettingsSchema.optional()
 });
 const isLocalMode = () => process.env.RENDER_MODE === 'local';
 const renderRequestSchema = zod_1.z.object({
@@ -320,6 +330,44 @@ function hashString(str) {
         hash |= 0;
     }
     return Math.abs(hash);
+}
+/**
+ * Executes a subprocess command asynchronously to avoid event loop blocking.
+ */
+async function runCommandAsync(command, args, job) {
+    return new Promise((resolve, reject) => {
+        console.log('[Spawn Command]', command, args.map(arg => arg.includes(' ') || arg.includes(';') ? `"${arg}"` : arg).join(' '));
+        const child = (0, child_process_1.spawn)(command, args);
+        if (job) {
+            job.process = child;
+        }
+        let errorLog = '';
+        child.stderr?.on('data', (data) => {
+            errorLog += data.toString();
+        });
+        child.on('close', (code) => {
+            if (job) {
+                job.process = undefined;
+            }
+            if (code === 0) {
+                resolve();
+            }
+            else {
+                if (job?.cancelled) {
+                    reject(new Error('Job cancelled'));
+                }
+                else {
+                    reject(new Error(`Command failed with exit code ${code}.\nstderr:\n${errorLog.slice(-1000)}`));
+                }
+            }
+        });
+        child.on('error', (err) => {
+            if (job) {
+                job.process = undefined;
+            }
+            reject(err);
+        });
+    });
 }
 /**
  * Subprocess wrapper to run FFmpeg while reporting progress updates.
@@ -537,7 +585,7 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
     if (!fs.existsSync(tmpDir)) {
         fs.mkdirSync(tmpDir, { recursive: true });
     }
-    const localInputPath = path.join(tmpDir, `input-${job.jobId}.mp4`);
+    let localInputPath = path.join(tmpDir, `input-${job.jobId}.mp4`);
     const localOutputPath = path.join(tmpDir, `output-${job.jobId}.mp4`);
     const fontPath = path.join(tmpDir, `font-${job.jobId}.ttf`);
     let localSoundtrackPath = '';
@@ -603,6 +651,56 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
             throw new Error(`Video resolution (${videoMetadata.width}x${videoMetadata.height}) exceeds the supported 1080p limit.`);
         }
         const hasAudio = checkAudioPresence(localInputPath);
+        // Run input quality analyzer pre-flights
+        console.log(`[AutoDirector Worker] Running qualityAnalyzer on input clip: ${localInputPath}`);
+        const beforeMetrics = (0, qualityAnalyzer_1.analyzeVideoQuality)(localInputPath, tmpDir);
+        console.log(`[AutoDirector Worker] Input Quality Metrics:`, beforeMetrics);
+        // Apply pre-stabilization if requested
+        const mqSettings = payload.blueprint.max_quality_settings;
+        const enhancementsApplied = [];
+        if (mqSettings?.stabilization) {
+            console.log(`[AutoDirector Worker] Stabilization is enabled. Running pre-stabilization...`);
+            const stabilizedPath = path.join(tmpDir, `input-stabilized-${job.jobId}.mp4`);
+            // Probe if vidstab is compiled
+            let hasVidstab = false;
+            try {
+                const filtersOutput = (0, child_process_1.execSync)(`"${getFfmpegCommand()}" -filters`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+                hasVidstab = filtersOutput.includes('vidstabdetect') && filtersOutput.includes('vidstabtransform');
+            }
+            catch { }
+            if (hasVidstab) {
+                console.log(`[AutoDirector Worker] Using vidstab for stabilization.`);
+                const trfPath = path.join(tmpDir, `transforms-${job.jobId}.trf`);
+                const trfPathRelative = path.relative(process.cwd(), trfPath).replace(/\\/g, '/');
+                try {
+                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', `vidstabdetect=shakiness=5:accuracy=10:result=${trfPathRelative}`, '-f', 'null', '-'], job);
+                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', `vidstabtransform=input=${trfPathRelative}:smoothing=15:interpol=linear`, '-c:v', 'libx264', '-crf', '17', '-preset', 'superfast', stabilizedPath], job);
+                    if (fs.existsSync(trfPath))
+                        fs.unlinkSync(trfPath);
+                    localInputPath = stabilizedPath;
+                    job.activeFiles.push(stabilizedPath);
+                    enhancementsApplied.push('VidStab Stabilization');
+                }
+                catch (err) {
+                    console.error('[AutoDirector Worker] vidstab stabilization failed, falling back to deshake:', err);
+                    if (fs.existsSync(trfPath))
+                        fs.unlinkSync(trfPath);
+                }
+            }
+            if (localInputPath !== stabilizedPath) {
+                // Fallback to deshake if vidstab wasn't compiled or failed
+                console.log(`[AutoDirector Worker] Falling back to deshake filter.`);
+                try {
+                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', 'deshake', '-c:v', 'libx264', '-crf', '17', '-preset', 'superfast', stabilizedPath], job);
+                    localInputPath = stabilizedPath;
+                    job.activeFiles.push(stabilizedPath);
+                    enhancementsApplied.push('Deshake Stabilization');
+                }
+                catch (err) {
+                    console.error('[AutoDirector Worker] Deshake fallback stabilization failed:', err);
+                }
+            }
+        }
         let transients = [];
         if (localSoundtrackPath && fs.existsSync(localSoundtrackPath)) {
             const analysis = await (0, audioAnalysis_1.extractAudioTransients)(localSoundtrackPath);
@@ -758,13 +856,97 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
         if (outputHasAudio) {
             ffmpegArgs.push('-c:a', 'aac', '-b:a', '192k');
         }
-        ffmpegArgs.push('-t', totalDuration.toFixed(3), localOutputPath);
+        const localRawOutputPath = path.join(tmpDir, `raw-output-${job.jobId}.mp4`);
+        job.activeFiles.push(localRawOutputPath);
+        ffmpegArgs.push('-t', totalDuration.toFixed(3), localRawOutputPath);
         const analysisDuration = (Date.now() - analysisStart) / 1000;
         // Stage 3: Render
         const renderStart = Date.now();
         await queue_1.renderQueueManager.notifyProgress(job, 10, 'RENDERING');
         await runFfmpegWithProgress(ffmpegArgs, totalDuration, job);
         const renderDuration = (Date.now() - renderStart) / 1000;
+        // Stage 3.5: MaxQuality Enhancement Post-Processing Pass
+        console.log(`[AutoDirector Worker] Running final enhancement pass...`);
+        const enhancementStart = Date.now();
+        const isPortrait = payload.blueprint.export?.resolution ? payload.blueprint.export.resolution[1] > payload.blueprint.export.resolution[0] : true;
+        let targetW = isPortrait ? 1080 : 1920;
+        let targetH = isPortrait ? 1920 : 1080;
+        const targetRes = mqSettings?.resolution || '1080p';
+        if (targetRes === '720p') {
+            targetW = isPortrait ? 720 : 1280;
+            targetH = isPortrait ? 1280 : 720;
+        }
+        else if (targetRes === '4K') {
+            targetW = isPortrait ? 2160 : 3840;
+            targetH = isPortrait ? 3840 : 2160;
+        }
+        const filterParts = [];
+        if (mqSettings?.denoise) {
+            filterParts.push('hqdn3d=luma_spatial=4:chroma_spatial=3');
+            enhancementsApplied.push('Denoise (hqdn3d)');
+        }
+        if (mqSettings?.sharpen) {
+            filterParts.push('unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.6:chroma_msize_x=5:chroma_msize_y=5:chroma_amount=0.0');
+            enhancementsApplied.push('Sharpen (unsharp)');
+        }
+        if (mqSettings?.colorRecovery) {
+            filterParts.push('eq=contrast=1.05:saturation=1.1');
+            enhancementsApplied.push('Color Recovery (eq)');
+        }
+        // Always scale with Lanczos to conform resolution exactly
+        filterParts.push(`scale=w=${targetW}:h=${targetH}:flags=lanczos`);
+        if (targetRes === '4K') {
+            enhancementsApplied.push('Lanczos Upscale to 4K');
+        }
+        else if (targetRes === '720p') {
+            enhancementsApplied.push('Downscale to 720p');
+        }
+        else {
+            if (filterParts.length > 1) {
+                enhancementsApplied.push('Conformed to 1080p');
+            }
+        }
+        // Adjust bitrates for 4K exports to guarantee visual excellence
+        let activeCodec = codec;
+        let activeBitrateArgs = [...bitrateArgs];
+        if (targetRes === '4K') {
+            if (payload.blueprint.export?.codec === 'hevc') {
+                activeBitrateArgs = ['-b:v', '15M', '-maxrate', '20M', '-bufsize', '35M'];
+            }
+            else {
+                activeBitrateArgs = ['-b:v', '25M', '-maxrate', '30M', '-bufsize', '50M'];
+            }
+        }
+        const hasEnhancements = mqSettings && (mqSettings.denoise || mqSettings.sharpen || mqSettings.colorRecovery || targetRes !== '1080p');
+        if (hasEnhancements && fs.existsSync(localRawOutputPath)) {
+            console.log(`[AutoDirector Worker] Enhancements found. Building enhancement pass command with filters: ${filterParts.join(',')}`);
+            const enhanceArgs = [
+                '-y',
+                '-i', localRawOutputPath,
+                '-vf', filterParts.join(','),
+                '-c:v', activeCodec,
+                ...activeBitrateArgs,
+                '-preset', 'veryfast',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                '-c:a', 'copy',
+                localOutputPath
+            ];
+            // Run FFmpeg enhancement asynchronously
+            await runCommandAsync(getFfmpegCommand(), enhanceArgs, job);
+        }
+        else {
+            console.log(`[AutoDirector Worker] No enhancements selected or default 1080p target. Moving conformed file directly.`);
+            if (fs.existsSync(localRawOutputPath)) {
+                fs.copyFileSync(localRawOutputPath, localOutputPath);
+            }
+        }
+        const enhancementDuration = (Date.now() - enhancementStart) / 1000;
+        console.log(`[AutoDirector Worker] Enhancement pass completed in ${enhancementDuration.toFixed(1)}s.`);
+        // Run output quality analyzer post-flights
+        console.log(`[AutoDirector Worker] Running qualityAnalyzer on output clip: ${localOutputPath}`);
+        const afterMetrics = (0, qualityAnalyzer_1.analyzeVideoQuality)(localOutputPath, tmpDir);
+        console.log(`[AutoDirector Worker] Output Quality Metrics:`, afterMetrics);
         // Stage 4: Upload
         const uploadStart = Date.now();
         await queue_1.renderQueueManager.notifyProgress(job, 95, 'UPLOADING');
@@ -781,15 +963,20 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
         job.diagnostics = {
             renderProfile: payload.blueprint.selected_mode,
             downloadDuration,
-            analysisDuration,
+            analysisDuration: analysisDuration + enhancementDuration,
             renderDuration,
             uploadDuration,
             totalDuration: totalJobDuration,
             outputSize,
             workerNode: `${require('os').hostname()}:${process.pid}`,
             videoDuration: totalDuration,
-            resolution: payload.blueprint.export?.resolution || [1080, 1920],
-            codec: codec
+            resolution: [targetW, targetH],
+            codec: activeCodec,
+            qualityDiagnostics: {
+                before: beforeMetrics,
+                after: afterMetrics,
+                enhancementsApplied
+            }
         };
         console.log(`[Queue] Render Job ${job.jobId} completed successfully in ${totalJobDuration.toFixed(1)}s.`);
         await queue_1.renderQueueManager.notifyProgress(job, 100, 'COMPLETED');

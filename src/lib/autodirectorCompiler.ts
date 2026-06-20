@@ -1,4 +1,4 @@
-import { EditDNABlueprint, TimelineBlock, ProjectDuration, ProjectPlatform } from '@/types/project';
+import { EditDNABlueprint, TimelineBlock, ProjectDuration, ProjectPlatform, MaxQualitySettings } from '@/types/project';
 import { AutoDirectorAnalysis, AutoDirectorShot, ReferenceDna } from '@/types/autodirector';
 import { STYLE_PRESETS, getPresetById } from './presetsRegistry';
 import { compileSoundDesignPlan, SoundDesignSettings } from './soundDesignCompiler';
@@ -229,6 +229,15 @@ export function compileAutoDirectorAnalysis(
     ? `ReferenceDNA placement: ${referenceDna.captionPlacement}`
     : `Clean safe-zone subtitles matching the ${preset.name} theme.`;
 
+  const defaultMaxQualitySettings: MaxQualitySettings = {
+    stabilization: maxQualityMode,
+    denoise: maxQualityMode,
+    sharpen: maxQualityMode,
+    colorRecovery: maxQualityMode,
+    upscaleFactor: 'none',
+    resolution: maxQualityMode ? '4K' : '1080p'
+  };
+
   return {
     editTitle: referenceDna ? `${preset.name} (Mimic: ${referenceDna.title}) - AutoDirector Blueprint` : `${preset.name} - AutoDirector Blueprint`,
     viewerEmotion: finalColorGrade,
@@ -243,6 +252,7 @@ export function compileAutoDirectorAnalysis(
     maxQualityPlan,
     exportRecommendation: `Format: 9:16 Portrait MP4 | Destination: ${platform} | Estimated Render Time: ${preset.estimatedRenderTime}.`,
     soundDesignSettings,
-    soundEvents
+    soundEvents,
+    maxQualitySettings: defaultMaxQualitySettings
   };
 }

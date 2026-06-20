@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertTriangle, Cpu, Share2, Loader2, Download, CheckCircle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Cpu, Share2, Loader2, Download, CheckCircle, RefreshCw, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Project } from '@/types/project';
 import { updateProject, createProjectVersion } from '@/lib/projects';
@@ -385,30 +385,98 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
 
               {/* Render success metadata */}
               {diagnostics && (
-                <div className="p-3 rounded bg-black/40 border border-white/5 text-[10px] text-gray-400 flex flex-col gap-1.5 leading-normal">
-                  <div className="font-bold text-gray-200 uppercase tracking-wider border-b border-white/5 pb-1 mb-1">Render Metadata</div>
-                  <div className="flex justify-between">
-                    <span>Duration:</span>
-                    <span className="text-gray-200">{diagnostics.videoDuration ? `${diagnostics.videoDuration.toFixed(1)}s` : '15.0s'}</span>
+                <div className="flex flex-col gap-3 w-full">
+                  <div className="p-3 rounded bg-black/40 border border-white/5 text-[10px] text-gray-400 flex flex-col gap-1.5 leading-normal font-mono">
+                    <div className="font-bold text-gray-200 uppercase tracking-wider border-b border-white/5 pb-1 mb-1">Render Metadata</div>
+                    <div className="flex justify-between">
+                      <span>Duration:</span>
+                      <span className="text-gray-200">{diagnostics.videoDuration ? `${diagnostics.videoDuration.toFixed(1)}s` : '15.0s'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Resolution:</span>
+                      <span className="text-gray-200">{diagnostics.resolution ? `${diagnostics.resolution[0]}x${diagnostics.resolution[1]}` : '1080x1920'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>File Size:</span>
+                      <span className="text-gray-200">
+                        {diagnostics.outputSize ? `${(diagnostics.outputSize / 1024 / 1024).toFixed(2)} MB` : 'N/A'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Render Time:</span>
+                      <span className="text-gray-200">{diagnostics.renderDuration ? `${diagnostics.renderDuration.toFixed(1)}s` : 'N/A'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Codec/Format:</span>
+                      <span className="text-gray-200 uppercase">{diagnostics.codec || 'H.264'}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Resolution:</span>
-                    <span className="text-gray-200">{diagnostics.resolution ? `${diagnostics.resolution[0]}x${diagnostics.resolution[1]}` : '1080x1920'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>File Size:</span>
-                    <span className="text-gray-200">
-                      {diagnostics.outputSize ? `${(diagnostics.outputSize / 1024 / 1024).toFixed(2)} MB` : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Render Time:</span>
-                    <span className="text-gray-200">{diagnostics.renderDuration ? `${diagnostics.renderDuration.toFixed(1)}s` : 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Codec/Format:</span>
-                    <span className="text-gray-200 uppercase">{diagnostics.codec || 'H.264'}</span>
-                  </div>
+
+                  {/* MaxQuality QualityDiagnostics comparative card */}
+                  {diagnostics.qualityDiagnostics && (
+                    <div className="p-3 rounded bg-[#090b16]/75 border border-brand-cyan/20 text-[10px] text-gray-400 flex flex-col gap-2 leading-normal font-mono">
+                      <div className="font-bold text-brand-cyan uppercase tracking-wider border-b border-brand-cyan/15 pb-1 flex items-center gap-1">
+                        <Sparkles className="w-3.5 h-3.5 text-brand-cyan" /> Quality Diagnostics
+                      </div>
+                      
+                      {/* Before / After comparative columns */}
+                      <div className="grid grid-cols-2 gap-2 text-[9px] border-b border-white/5 pb-2">
+                        <div className="flex flex-col gap-1 border-r border-white/5 pr-2">
+                          <span className="text-gray-500 font-bold uppercase text-[8px]">Before</span>
+                          <div className="flex justify-between">
+                            <span>Res:</span>
+                            <span className="text-gray-300 font-bold">{diagnostics.qualityDiagnostics.before?.resolution || 'N/A'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Blur:</span>
+                            <span className="text-gray-300 font-bold">{diagnostics.qualityDiagnostics.before?.blurScore !== undefined ? `${diagnostics.qualityDiagnostics.before.blurScore.toFixed(1)}/10` : 'N/A'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Shake:</span>
+                            <span className="text-gray-300 font-bold">{diagnostics.qualityDiagnostics.before?.shakeScore !== undefined ? `${diagnostics.qualityDiagnostics.before.shakeScore.toFixed(1)}/10` : 'N/A'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Noise:</span>
+                            <span className="text-gray-300 font-bold">{diagnostics.qualityDiagnostics.before?.noiseScore !== undefined ? `${diagnostics.qualityDiagnostics.before.noiseScore.toFixed(1)}/10` : 'N/A'}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1 pl-1">
+                          <span className="text-brand-green font-bold uppercase text-[8px]">Enhanced</span>
+                          <div className="flex justify-between">
+                            <span>Res:</span>
+                            <span className="text-brand-green font-bold">{diagnostics.qualityDiagnostics.after?.resolution || 'N/A'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Blur:</span>
+                            <span className="text-brand-green font-bold">{diagnostics.qualityDiagnostics.after?.blurScore !== undefined ? `${diagnostics.qualityDiagnostics.after.blurScore.toFixed(1)}/10` : 'N/A'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Shake:</span>
+                            <span className="text-brand-green font-bold">{diagnostics.qualityDiagnostics.after?.shakeScore !== undefined ? `${diagnostics.qualityDiagnostics.after.shakeScore.toFixed(1)}/10` : 'N/A'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Noise:</span>
+                            <span className="text-brand-green font-bold">{diagnostics.qualityDiagnostics.after?.noiseScore !== undefined ? `${diagnostics.qualityDiagnostics.after.noiseScore.toFixed(1)}/10` : 'N/A'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Applied enhancements badges list */}
+                      {diagnostics.qualityDiagnostics.enhancementsApplied && diagnostics.qualityDiagnostics.enhancementsApplied.length > 0 && (
+                        <div className="flex flex-col gap-1">
+                          <span className="text-gray-500 uppercase font-bold text-[7px]">Enhancements</span>
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {diagnostics.qualityDiagnostics.enhancementsApplied.map((item: string, idx: number) => (
+                              <span key={idx} className="bg-brand-cyan/10 border border-brand-cyan/20 text-brand-cyan text-[8px] px-1 py-0.2 rounded font-bold uppercase">
+                                {item}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

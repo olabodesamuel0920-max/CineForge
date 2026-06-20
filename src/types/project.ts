@@ -24,6 +24,30 @@ export interface TimelineBlock {
 
 import { SoundDesignSettings, SoundEvent } from '@/lib/soundDesignCompiler';
 
+export interface MaxQualitySettings {
+  stabilization: boolean;
+  denoise: boolean;
+  sharpen: boolean;
+  colorRecovery: boolean;
+  upscaleFactor: 'none' | '2x' | '4x';
+  resolution: '720p' | '1080p' | '4K';
+}
+
+export interface QualityMetrics {
+  resolution: string;
+  fps: number;
+  bitrateKbps: number;
+  noiseScore: number;
+  shakeScore: number;
+  blurScore: number;
+}
+
+export interface QualityDiagnostics {
+  before?: QualityMetrics;
+  after?: QualityMetrics;
+  enhancementsApplied?: string[];
+}
+
 export interface EditDNABlueprint {
   editTitle: string;
   viewerEmotion: string;
@@ -39,6 +63,7 @@ export interface EditDNABlueprint {
   exportRecommendation: string;
   soundDesignSettings?: SoundDesignSettings;
   soundEvents?: SoundEvent[];
+  maxQualitySettings?: MaxQualitySettings;
 }
 
 export interface Project {

@@ -130,7 +130,15 @@ export async function POST(request: Request) {
 
     // 3. Map export format configurations
     const isPortrait = project.platform !== 'YouTube';
-    const resolution = isPortrait ? [1080, 1920] : [1920, 1080];
+    const targetResSetting = project.blueprint.maxQualitySettings?.resolution || (project.maxQualityMode ? '4K' : '1080p');
+    
+    let resolution = isPortrait ? [1080, 1920] : [1920, 1080];
+    if (targetResSetting === '720p') {
+      resolution = isPortrait ? [720, 1280] : [1280, 720];
+    } else if (targetResSetting === '4K') {
+      resolution = isPortrait ? [2160, 3840] : [3840, 2160];
+    }
+
     const fps = project.maxQualityMode ? 60 : 30;
     const codec = project.maxQualityMode ? 'hevc' : 'h264';
 
@@ -168,7 +176,15 @@ export async function POST(request: Request) {
         },
         selected_mode: project.selectedMode,
         viewer_emotion: project.blueprint.viewerEmotion,
-        hook_intensity: project.maxQualityMode ? 1.5 : 0.8
+        hook_intensity: project.maxQualityMode ? 1.5 : 0.8,
+        max_quality_settings: project.blueprint.maxQualitySettings || {
+          stabilization: false,
+          denoise: false,
+          sharpen: false,
+          colorRecovery: false,
+          upscaleFactor: 'none',
+          resolution: '1080p'
+        }
       },
       taskId: project.id,
       outputGcsUrl: `gs://${bucketName}/rendered/output-${project.id}.mp4`
