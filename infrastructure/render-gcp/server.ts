@@ -11,6 +11,7 @@ import { renderQueueManager, RenderJob } from './queue';
 import { AutoDirectorAnalysis } from './types/autodirector';
 import { AUDIO_ASSETS, SoundEvent, SoundDesignSettings, compileSoundDesignPlan } from './soundDesignCompiler';
 import { analyzeVideoQuality, QualityMetrics } from './qualityAnalyzer';
+import { runNeuralUpscale } from './aiUpscaler';
 
 if (process.env.RENDER_MODE !== 'cloud') {
   process.env.RENDER_MODE = 'local';
@@ -138,7 +139,11 @@ const maxQualitySettingsSchema = z.object({
   sharpen: z.boolean(),
   colorRecovery: z.boolean(),
   upscaleFactor: z.enum(['none', '2x', '4x']),
-  resolution: z.enum(['720p', '1080p', '4K'])
+  resolution: z.enum(['720p', '1080p', '4K']),
+  neuralUpscale: z.boolean().optional(),
+  aiUpscaleFactor: z.enum(['none', '2x', '4x']).optional(),
+  aiBudgetCap: z.number().optional(),
+  faceRestoration: z.boolean().optional()
 });
 
 const blueprintSchema = z.object({
@@ -169,6 +174,7 @@ const renderRequestSchema = z.object({
   soundtrackGcsUrl: z.string().optional(),
   blueprint: blueprintSchema,
   taskId: z.string().optional(),
+  projectDuration: z.string().optional(),
   outputGcsUrl: z.string().refine(val => isLocalMode() || val.startsWith('gs://'), {
     message: 'outputGcsUrl must start with gs:// in cloud mode'
   }),
@@ -685,9 +691,30 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
     const beforeMetrics = analyzeVideoQuality(localInputPath, tmpDir);
     console.log(`[AutoDirector Worker] Input Quality Metrics:`, beforeMetrics);
 
+    // Compute raw file content hash to guarantee stable AI cache keys
+    let rawFileHash = '';
+    try {
+      const crypto = require('crypto');
+      const fileBuffer = fs.readFileSync(localInputPath);
+      rawFileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      console.log(`[AutoDirector Worker] Computed raw file content hash: ${rawFileHash}`);
+    } catch (hashErr) {
+      console.error('[AutoDirector Worker] Failed to compute raw file hash:', hashErr);
+    }
+
     // Apply pre-stabilization if requested
     const mqSettings = payload.blueprint.max_quality_settings;
     const enhancementsApplied: string[] = [];
+    const aiDiagnostics = {
+      aiEnabled: false,
+      cacheHit: false,
+      provider: 'none',
+      fallbackReason: undefined as string | undefined,
+      aiDuration: 0,
+      estimatedCost: 0,
+      actualCost: 0,
+      finalResolution: ''
+    };
 
     if (mqSettings?.stabilization) {
       console.log(`[AutoDirector Worker] Stabilization is enabled. Running pre-stabilization...`);
@@ -727,6 +754,80 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
           enhancementsApplied.push('Deshake Stabilization');
         } catch (err) {
           console.error('[AutoDirector Worker] Deshake fallback stabilization failed:', err);
+        }
+      }
+    }
+
+    // Apply G5.2A AI Super-Resolution (Neural Upscaling) if requested
+    if (mqSettings?.neuralUpscale) {
+      console.log(`[AutoDirector Worker] AI Neural Upscaling is requested (${mqSettings.aiUpscaleFactor || '2x'}).`);
+      aiDiagnostics.aiEnabled = true;
+      const aiUpscaledPath = path.join(tmpDir, `input-ai-upscaled-${job.jobId}.mp4`);
+      
+      const projectDuration = payload.projectDuration || '10s';
+      const result = await runNeuralUpscale(
+        localInputPath,
+        aiUpscaledPath,
+        mqSettings,
+        payload.outputGcsUrl,
+        tmpDir,
+        projectDuration,
+        job.jobId,
+        rawFileHash
+      );
+
+      aiDiagnostics.cacheHit = result.cacheHit;
+      aiDiagnostics.provider = result.provider;
+      aiDiagnostics.aiDuration = result.duration;
+      aiDiagnostics.actualCost = result.cost;
+      
+      // Calculate estimated cost for diagnostics
+      const estDurationSec = projectDuration === '5s' ? 5 : 10;
+      const estRate = (mqSettings.aiUpscaleFactor || '2x') === '2x' ? 0.05 : 0.07;
+      aiDiagnostics.estimatedCost = estDurationSec * estRate;
+
+      if (result.success && fs.existsSync(aiUpscaledPath)) {
+        console.log(`[AutoDirector Worker] AI Upscaling succeeded. Using upscaled clip as input.`);
+        localInputPath = aiUpscaledPath;
+        job.activeFiles.push(aiUpscaledPath);
+        enhancementsApplied.push(`AI Super-Resolution (${mqSettings.aiUpscaleFactor || '2x'})`);
+        
+        // Resolve final resolution for diagnostics
+        try {
+          const meta = parseVideoMetadata(aiUpscaledPath);
+          aiDiagnostics.finalResolution = `${meta.width}x${meta.height}`;
+        } catch {
+          aiDiagnostics.finalResolution = mqSettings.aiUpscaleFactor === '4x' ? '3840x2160' : '1920x1080';
+        }
+      } else {
+        console.warn(`[AutoDirector Worker] AI Upscaling fell back to classical. Reason: ${result.fallbackReason || result.error}`);
+        aiDiagnostics.fallbackReason = result.fallbackReason || result.error || 'Unknown error';
+        
+        // Perform classical fallback to Lanczos / Unsharp
+        const classicalUpscaledPath = path.join(tmpDir, `input-classical-upscaled-${job.jobId}.mp4`);
+        console.log(`[AutoDirector Worker] Executing classical Lanczos fallback upscale to ${classicalUpscaledPath}`);
+        
+        try {
+          const isVert = videoMetadata.height > videoMetadata.width;
+          const targetW = (mqSettings.aiUpscaleFactor || '2x') === '4x' ? (isVert ? 2160 : 3840) : (isVert ? 1080 : 1920);
+          const targetH = (mqSettings.aiUpscaleFactor || '2x') === '4x' ? (isVert ? 3840 : 2160) : (isVert ? 1920 : 1080);
+          
+          await runCommandAsync(getFfmpegCommand(), [
+            '-y',
+            '-i', localInputPath,
+            '-vf', `scale=w=${targetW}:h=${targetH}:flags=lanczos,unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.6`,
+            '-c:v', 'libx264',
+            '-crf', '17',
+            '-preset', 'superfast',
+            classicalUpscaledPath
+          ], job);
+          
+          localInputPath = classicalUpscaledPath;
+          job.activeFiles.push(classicalUpscaledPath);
+          enhancementsApplied.push('Classical Lanczos Upscaling (Fallback)');
+          aiDiagnostics.finalResolution = `${targetW}x${targetH}`;
+        } catch (fallbackErr) {
+          console.error(`[AutoDirector Worker] Classical fallback upscale failed:`, fallbackErr);
         }
       }
     }
@@ -1055,7 +1156,17 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
       qualityDiagnostics: {
         before: beforeMetrics,
         after: afterMetrics,
-        enhancementsApplied
+        enhancementsApplied,
+        aiDiagnostics: {
+          enabled: aiDiagnostics.aiEnabled,
+          cacheHit: aiDiagnostics.cacheHit,
+          provider: aiDiagnostics.provider,
+          fallbackReason: aiDiagnostics.fallbackReason,
+          estimatedCost: aiDiagnostics.estimatedCost,
+          actualCost: aiDiagnostics.actualCost,
+          duration: aiDiagnostics.aiDuration,
+          finalResolution: aiDiagnostics.finalResolution
+        }
       }
     };
 

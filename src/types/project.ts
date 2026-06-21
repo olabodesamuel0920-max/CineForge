@@ -31,6 +31,11 @@ export interface MaxQualitySettings {
   colorRecovery: boolean;
   upscaleFactor: 'none' | '2x' | '4x';
   resolution: '720p' | '1080p' | '4K';
+  // G5.2A AI Super-Resolution & Face Restoration
+  neuralUpscale?: boolean;
+  aiUpscaleFactor?: 'none' | '2x' | '4x';
+  aiBudgetCap?: number;
+  faceRestoration?: boolean;
 }
 
 export interface QualityMetrics {

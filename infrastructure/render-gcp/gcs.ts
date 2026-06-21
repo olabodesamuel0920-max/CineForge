@@ -66,6 +66,7 @@ export async function downloadFromGcs(
       const pathsToCheck = [
         path.join(targetDir, filename),
         path.join(path.dirname(targetDir), filename),
+        path.join(path.dirname(targetDir), 'renders', filename),
         path.join(path.dirname(path.dirname(targetDir)), filename)
       ];
       

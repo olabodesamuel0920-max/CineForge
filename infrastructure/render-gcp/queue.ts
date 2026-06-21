@@ -49,6 +49,16 @@ export interface RenderJob {
         blurScore: number;
       };
       enhancementsApplied?: string[];
+      aiDiagnostics?: {
+        enabled: boolean;
+        cacheHit: boolean;
+        provider: string;
+        fallbackReason?: string;
+        estimatedCost?: number;
+        actualCost?: number;
+        duration?: number;
+        finalResolution?: string;
+      };
     };
   };
   resolve?: (value: any) => void;
@@ -258,16 +268,64 @@ class QueueManager {
   }
 
   /**
+   * Dynamically determines the maximum active renders.
+   * If any active render has neuralUpscale enabled, we throttle concurrency to 1.
+   */
+  private getMaxConcurrentRenders(): number {
+    let hasActiveAiJob = false;
+    for (const activeJob of this.activeRenders.values()) {
+      const mq = activeJob.reqBody?.blueprint?.max_quality_settings;
+      if (mq?.neuralUpscale === true) {
+        hasActiveAiJob = true;
+        break;
+      }
+    }
+
+    if (hasActiveAiJob) {
+      console.log('[Queue] Active AI upscale job detected. Throttling render concurrency to 1.');
+      return 1;
+    }
+
+    return Number(process.env.MAX_CONCURRENT_RENDERS ?? 2);
+  }
+
+  /**
    * Processes the Master Renders queue.
    */
   private processRenders() {
-    if (this.activeRenders.size >= MAX_CONCURRENT_RENDERS) {
+    const limit = this.getMaxConcurrentRenders();
+    if (this.activeRenders.size >= limit) {
       return;
     }
 
-    const nextJob = this.renderQueue.shift();
-    if (!nextJob) return;
+    // Determine if an AI job is already active to prevent running two AI jobs concurrently
+    let hasActiveAiJob = false;
+    for (const activeJob of this.activeRenders.values()) {
+      const mq = activeJob.reqBody?.blueprint?.max_quality_settings;
+      if (mq?.neuralUpscale === true) {
+        hasActiveAiJob = true;
+        break;
+      }
+    }
 
+    // Find the next job in the queue that can run
+    let nextJobIndex = -1;
+    for (let i = 0; i < this.renderQueue.length; i++) {
+      const job = this.renderQueue[i];
+      const isJobAi = job.reqBody?.blueprint?.max_quality_settings?.neuralUpscale === true;
+      
+      // If it's an AI job, it can only run if no other AI job is active
+      if (!isJobAi || !hasActiveAiJob) {
+        nextJobIndex = i;
+        break;
+      }
+    }
+
+    if (nextJobIndex === -1) {
+      return;
+    }
+
+    const [nextJob] = this.renderQueue.splice(nextJobIndex, 1);
     this.activeRenders.set(nextJob.jobId, nextJob);
     nextJob.startedAt = Date.now();
     nextJob.status = 'DOWNLOADING';

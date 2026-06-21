@@ -94,6 +94,7 @@ async function downloadFromGcs(gcsUri, destPath, maxRetries = 3, baseDelayMs = 1
             const pathsToCheck = [
                 path.join(targetDir, filename),
                 path.join(path.dirname(targetDir), filename),
+                path.join(path.dirname(targetDir), 'renders', filename),
                 path.join(path.dirname(path.dirname(targetDir)), filename)
             ];
             let found = false;

@@ -150,6 +150,7 @@ export async function POST(request: Request) {
 
     const renderPayload = {
       sourceVideoGcsUrl,
+      projectDuration: project.duration,
       blueprint: {
         timeline,
         audio: {

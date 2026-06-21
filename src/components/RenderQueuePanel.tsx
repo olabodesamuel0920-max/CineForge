@@ -475,6 +475,41 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
                           </div>
                         </div>
                       )}
+
+                      {/* G5.2A AI Diagnostics Report */}
+                      {diagnostics.qualityDiagnostics.aiDiagnostics?.enabled && (
+                        <div className="mt-2 pt-2 border-t border-white/5 flex flex-col gap-1.5 text-[9px] text-gray-400">
+                          <span className="text-brand-violet uppercase font-bold text-[7px] tracking-wider">AI Super-Resolution Diagnostics</span>
+                          <div className="flex justify-between">
+                            <span>Provider:</span>
+                            <span className="text-gray-200 font-semibold">{diagnostics.qualityDiagnostics.aiDiagnostics.provider}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Cache Hit:</span>
+                            <span className={diagnostics.qualityDiagnostics.aiDiagnostics.cacheHit ? 'text-brand-green font-bold' : 'text-gray-400'}>
+                              {diagnostics.qualityDiagnostics.aiDiagnostics.cacheHit ? 'TRUE (Skip Replicate)' : 'FALSE (Processed)'}
+                            </span>
+                          </div>
+                          {diagnostics.qualityDiagnostics.aiDiagnostics.duration !== undefined && diagnostics.qualityDiagnostics.aiDiagnostics.duration > 0 && (
+                            <div className="flex justify-between">
+                              <span>AI Duration:</span>
+                              <span className="text-gray-200">{diagnostics.qualityDiagnostics.aiDiagnostics.duration.toFixed(1)}s</span>
+                            </div>
+                          )}
+                          {diagnostics.qualityDiagnostics.aiDiagnostics.actualCost !== undefined && diagnostics.qualityDiagnostics.aiDiagnostics.actualCost > 0 && (
+                            <div className="flex justify-between">
+                              <span>Actual Cost:</span>
+                              <span className="text-brand-violet font-semibold">${diagnostics.qualityDiagnostics.aiDiagnostics.actualCost.toFixed(4)}</span>
+                            </div>
+                          )}
+                          {diagnostics.qualityDiagnostics.aiDiagnostics.fallbackReason && (
+                            <div className="flex flex-col gap-0.5 mt-1 p-1 bg-red-950/20 border border-red-500/20 text-[8px] text-red-400 rounded">
+                              <span className="font-bold uppercase">Fallback Triggered:</span>
+                              <span>{diagnostics.qualityDiagnostics.aiDiagnostics.fallbackReason}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

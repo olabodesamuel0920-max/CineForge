@@ -75,6 +75,9 @@ async function run() {
     true,      // maxQualityMode
     refDna     // referenceDna style overrides
   );
+  if (blueprint.maxQualitySettings) {
+    blueprint.maxQualitySettings.resolution = '1080p';
+  }
 
   console.log('[Step 3 Success] EditDNA conformed with ReferenceDNA pacing.');
   console.log(`  Title: ${blueprint.editTitle}`);

@@ -981,6 +981,7 @@ export default function ProjectDetailPage() {
             <MaxQualitySettingsPanel
               blueprint={project.blueprint}
               onChange={handleMaxQualitySettingsChange}
+              projectDuration={project.duration}
             />
 
             {/* Cinematic Sound Design Panel */}
