@@ -5,7 +5,7 @@ import { compileAutoDirectorAnalysis } from './autodirectorCompiler';
 import { ProjectDuration } from '../types/project';
 
 const FRONTEND_URL = 'http://localhost:3000';
-const WORKSPACE_DIR = 'c:/Users/colds/Documents/GitHub/CineForge';
+const WORKSPACE_DIR = path.join(__dirname, '../..');
 
 interface ValidationCategory {
   name: string;

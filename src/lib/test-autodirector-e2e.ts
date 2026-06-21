@@ -3,7 +3,7 @@ import path from 'path';
 import { compileAutoDirectorAnalysis } from './autodirectorCompiler';
 
 const FRONTEND_URL = 'http://localhost:3000';
-const WORKSPACE_DIR = 'c:/Users/colds/Documents/GitHub/CineForge';
+const WORKSPACE_DIR = path.join(__dirname, '../..');
 
 async function runAutoDirectorE2ETest() {
   console.log('================================================');
