@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
-import { getRenderNodeUrl } from '@/lib/renderUrl';
+import { getRenderNodeUrl, handleWorkerResponse } from '@/lib/renderUrl';
 
 export async function POST(request: Request) {
   try {
@@ -258,8 +258,17 @@ export async function POST(request: Request) {
       body: JSON.stringify(renderPayload),
     });
 
-    const result = await response.json();
-    return NextResponse.json(result, { status: response.status });
+    try {
+      const result = await handleWorkerResponse(response);
+      return NextResponse.json(result, { status: response.status });
+    } catch (err) {
+      const errText = (err as Error).message;
+      console.error(`[Render API] Worker call failed:`, errText);
+      return NextResponse.json(
+        { error: errText.includes('Worker service unavailable') ? errText : `Render worker failed: ${errText}` },
+        { status: response.status >= 400 && response.status < 600 ? response.status : 500 }
+      );
+    }
   } catch (error) {
     console.error('Failed to parse and proxy render request:', error);
     return NextResponse.json(

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getRenderNodeUrl } from '@/lib/renderUrl';
+import { getRenderNodeUrl, handleWorkerResponse } from '@/lib/renderUrl';
 
 export async function GET(
   request: Request,
@@ -16,15 +16,17 @@ export async function GET(
       }
     });
     
-    if (!response.ok) {
+    try {
+      const result = await handleWorkerResponse(response);
+      return NextResponse.json(result);
+    } catch (err) {
+      const errText = (err as Error).message;
+      console.error(`[Cancel API] Worker call failed:`, errText);
       return NextResponse.json(
-        { error: `Render node returned status ${response.status}` },
-        { status: response.status }
+        { error: errText.includes('Worker service unavailable') ? errText : `Cancel worker failed: ${errText}` },
+        { status: response.status >= 400 && response.status < 600 ? response.status : 500 }
       );
     }
-    
-    const result = await response.json();
-    return NextResponse.json(result);
   } catch (error) {
     console.error('Failed to proxy status request:', error);
     return NextResponse.json(

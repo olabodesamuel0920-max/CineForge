@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Storage } from '@google-cloud/storage';
-import { getRenderNodeUrl } from '@/lib/renderUrl';
+import { getRenderNodeUrl, handleWorkerResponse } from '@/lib/renderUrl';
 import { getGcsStorage } from '@/lib/gcsClient';
 
 type FrontendStatus = "draft" | "uploaded" | "blueprint_ready" | "analysis_preparing" | "rendering" | "completed" | "failed" | "queued";
@@ -58,14 +58,17 @@ export async function GET(
       });
     }
 
-    if (!response.ok) {
+    let result;
+    try {
+      result = await handleWorkerResponse(response);
+    } catch (err) {
+      const errText = (err as Error).message;
+      console.error(`[Status API] Worker check failed:`, errText);
       return NextResponse.json(
-        { error: `Render node status check returned status code ${response.status}` },
-        { status: response.status }
+        { error: errText.includes('Worker service unavailable') ? errText : `Status worker check failed: ${errText}` },
+        { status: response.status >= 400 && response.status < 600 ? response.status : 500 }
       );
     }
-    
-    const result = await response.json();
     
     // Map backend status strings to frontend status schema
     let status: FrontendStatus = 'analysis_preparing';

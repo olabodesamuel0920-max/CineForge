@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSupabase } from '@/lib/supabase';
-import { getRenderNodeUrl } from '@/lib/renderUrl';
+import { getRenderNodeUrl, handleWorkerResponse } from '@/lib/renderUrl';
 
 const requestSchema = z.object({
   title: z.string().min(1, 'title is required'),
@@ -81,16 +81,17 @@ export async function POST(request: Request) {
       })
     });
 
-    if (!workerResponse.ok) {
-      const errText = await workerResponse.text();
-      console.error(`[ReferenceDNA Analyze] Worker rejected task (${workerResponse.status}):`, errText);
+    let workerResult;
+    try {
+      workerResult = await handleWorkerResponse(workerResponse);
+    } catch (err) {
+      const errText = (err as Error).message;
+      console.error(`[ReferenceDNA Analyze] Worker rejected task:`, errText);
       return NextResponse.json(
-        { error: `Inspection worker failed: ${errText || 'Unknown error'}` },
-        { status: workerResponse.status }
+        { error: errText.includes('Worker service unavailable') ? errText : `Inspection worker failed: ${errText}` },
+        { status: workerResponse.status >= 400 && workerResponse.status < 600 ? workerResponse.status : 500 }
       );
     }
-
-    const workerResult = await workerResponse.json();
 
     // 6. Save ReferenceDNA to Supabase or return for localStorage guest mode
     if (client && userId) {

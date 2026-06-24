@@ -25,3 +25,27 @@ export function getRenderNodeUrl(fallback?: string): string {
   
   return normalized;
 }
+
+export async function handleWorkerResponse(response: Response): Promise<any> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  
+  if (trimmed.startsWith('<html') || trimmed.startsWith('<!DOCTYPE html') || trimmed.includes('<html')) {
+    throw new Error('Worker service unavailable. Please check Cloud Run deployment.');
+  }
+
+  if (!response.ok) {
+    let errMessage = text;
+    try {
+      const parsed = JSON.parse(text);
+      errMessage = parsed.error || parsed.message || errMessage;
+    } catch (e) {}
+    throw new Error(errMessage);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error('Worker returned an invalid JSON response.');
+  }
+}

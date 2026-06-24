@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSupabase } from '@/lib/supabase';
-import { getRenderNodeUrl } from '@/lib/renderUrl';
+import { getRenderNodeUrl, handleWorkerResponse } from '@/lib/renderUrl';
 
 // Stricter request validation
 const requestSchema = z.object({
@@ -98,21 +98,21 @@ export async function POST(request: Request) {
       })
     });
 
-    if (!workerResponse.ok) {
-      const errText = await workerResponse.text();
-      console.error(`[AutoDirector Inspect] Worker rejected task (${workerResponse.status}):`, errText);
+    try {
+      const workerResult = await handleWorkerResponse(workerResponse);
+      
+      // Cache the successful result
+      analysisCache.set(cacheKey, workerResult);
+
+      return NextResponse.json(workerResult);
+    } catch (err) {
+      const errText = (err as Error).message;
+      console.error(`[AutoDirector Inspect] Worker rejected task:`, errText);
       return NextResponse.json(
-        { error: `Inspection worker failed: ${errText || 'Unknown error'}` },
-        { status: workerResponse.status }
+        { error: errText.includes('Worker service unavailable') ? errText : `Inspection worker failed: ${errText}` },
+        { status: workerResponse.status >= 400 && workerResponse.status < 600 ? workerResponse.status : 500 }
       );
     }
-
-    const workerResult = await workerResponse.json();
-
-    // Cache the successful result
-    analysisCache.set(cacheKey, workerResult);
-
-    return NextResponse.json(workerResult);
 
   } catch (err) {
     console.error('[AutoDirector Inspect] Unexpected handler collapse:', err);
