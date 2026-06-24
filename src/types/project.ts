@@ -30,12 +30,17 @@ export interface MaxQualitySettings {
   sharpen: boolean;
   colorRecovery: boolean;
   upscaleFactor: 'none' | '2x' | '4x';
-  resolution: '720p' | '1080p' | '4K';
+  resolution: '720p' | '1080p' | '4K' | '8K' | '16K';
   // G5.2A AI Super-Resolution & Face Restoration
   neuralUpscale?: boolean;
   aiUpscaleFactor?: 'none' | '2x' | '4x';
   aiBudgetCap?: number;
   faceRestoration?: boolean;
+  faceProvider?: string;
+  faceFidelity?: number;
+  faceBudgetCap?: number;
+  faceCacheTtlDays?: number;
+  identityPreservationMode?: string;
 }
 
 export interface QualityMetrics {

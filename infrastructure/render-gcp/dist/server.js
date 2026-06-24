@@ -164,11 +164,16 @@ const maxQualitySettingsSchema = zod_1.z.object({
     sharpen: zod_1.z.boolean(),
     colorRecovery: zod_1.z.boolean(),
     upscaleFactor: zod_1.z.enum(['none', '2x', '4x']),
-    resolution: zod_1.z.enum(['720p', '1080p', '4K']),
+    resolution: zod_1.z.enum(['720p', '1080p', '4K', '8K', '16K']),
     neuralUpscale: zod_1.z.boolean().optional(),
     aiUpscaleFactor: zod_1.z.enum(['none', '2x', '4x']).optional(),
     aiBudgetCap: zod_1.z.number().optional(),
-    faceRestoration: zod_1.z.boolean().optional()
+    faceRestoration: zod_1.z.boolean().optional(),
+    faceProvider: zod_1.z.string().optional(),
+    faceFidelity: zod_1.z.number().optional(),
+    faceBudgetCap: zod_1.z.number().optional(),
+    faceCacheTtlDays: zod_1.z.number().optional(),
+    identityPreservationMode: zod_1.z.string().optional()
 });
 const blueprintSchema = zod_1.z.object({
     timeline: zod_1.z.array(timelineBlockSchema).nonempty('Timeline blocks cannot be empty'),
@@ -595,6 +600,34 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
     const localOutputPath = path.join(tmpDir, `output-${job.jobId}.mp4`);
     const fontPath = path.join(tmpDir, `font-${job.jobId}.ttf`);
     let localSoundtrackPath = '';
+    // G5.3A early variables for catch-block diagnostics
+    let payload = null;
+    let mqSettings = null;
+    let encoderPathUsed = 'Unknown';
+    let estOutputSize = 0;
+    const enhancementsApplied = [];
+    const aiDiagnostics = {
+        aiEnabled: false,
+        cacheHit: false,
+        provider: 'none',
+        fallbackReason: undefined,
+        aiDuration: 0,
+        estimatedCost: 0,
+        actualCost: 0,
+        finalResolution: ''
+    };
+    const faceDiagnostics = {
+        enabled: false,
+        provider: 'none',
+        modelVersion: '',
+        cacheHit: false,
+        facesDetected: 0,
+        framesProcessed: 0,
+        budgetUsed: 0,
+        fallbackReason: undefined,
+        fidelitySetting: 0.6,
+        privacyCacheTtlDays: 7
+    };
     // Register active file safety locks
     job.activeFiles = [localInputPath, localOutputPath, fontPath];
     try {
@@ -604,7 +637,7 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
         if (diskInfo.freeBytes < MIN_DISK_SPACE_BYTES) {
             throw new Error(`Worker storage limit reached. Free space: ${(diskInfo.freeBytes / 1024 / 1024).toFixed(1)}MB, required: ${(MIN_DISK_SPACE_BYTES / 1024 / 1024).toFixed(1)}MB.`);
         }
-        const payload = renderRequestSchema.parse(job.reqBody);
+        payload = renderRequestSchema.parse(job.reqBody);
         // Setup Font
         let localFontBundlePath = path.join(__dirname, 'assets', 'Roboto-Bold.ttf');
         if (!fs.existsSync(localFontBundlePath)) {
@@ -673,123 +706,14 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
             console.error('[AutoDirector Worker] Failed to compute raw file hash:', hashErr);
         }
         // Apply pre-stabilization if requested
-        const mqSettings = payload.blueprint.max_quality_settings;
-        const enhancementsApplied = [];
-        const aiDiagnostics = {
-            aiEnabled: false,
-            cacheHit: false,
-            provider: 'none',
-            fallbackReason: undefined,
-            aiDuration: 0,
-            estimatedCost: 0,
-            actualCost: 0,
-            finalResolution: ''
-        };
-        if (mqSettings?.stabilization) {
-            console.log(`[AutoDirector Worker] Stabilization is enabled. Running pre-stabilization...`);
-            const stabilizedPath = path.join(tmpDir, `input-stabilized-${job.jobId}.mp4`);
-            // Probe if vidstab is compiled
-            let hasVidstab = false;
-            try {
-                const filtersOutput = (0, child_process_1.execSync)(`"${getFfmpegCommand()}" -filters`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
-                hasVidstab = filtersOutput.includes('vidstabdetect') && filtersOutput.includes('vidstabtransform');
-            }
-            catch { }
-            if (hasVidstab) {
-                console.log(`[AutoDirector Worker] Using vidstab for stabilization.`);
-                const trfPath = path.join(tmpDir, `transforms-${job.jobId}.trf`);
-                const trfPathRelative = path.relative(process.cwd(), trfPath).replace(/\\/g, '/');
-                try {
-                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', `vidstabdetect=shakiness=5:accuracy=10:result=${trfPathRelative}`, '-f', 'null', '-'], job);
-                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', `vidstabtransform=input=${trfPathRelative}:smoothing=15:interpol=linear`, '-c:v', 'libx264', '-crf', '17', '-preset', 'superfast', stabilizedPath], job);
-                    if (fs.existsSync(trfPath))
-                        fs.unlinkSync(trfPath);
-                    localInputPath = stabilizedPath;
-                    job.activeFiles.push(stabilizedPath);
-                    enhancementsApplied.push('VidStab Stabilization');
-                }
-                catch (err) {
-                    console.error('[AutoDirector Worker] vidstab stabilization failed, falling back to deshake:', err);
-                    if (fs.existsSync(trfPath))
-                        fs.unlinkSync(trfPath);
-                }
-            }
-            if (localInputPath !== stabilizedPath) {
-                // Fallback to deshake if vidstab wasn't compiled or failed
-                console.log(`[AutoDirector Worker] Falling back to deshake filter.`);
-                try {
-                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', 'deshake', '-c:v', 'libx264', '-crf', '17', '-preset', 'superfast', stabilizedPath], job);
-                    localInputPath = stabilizedPath;
-                    job.activeFiles.push(stabilizedPath);
-                    enhancementsApplied.push('Deshake Stabilization');
-                }
-                catch (err) {
-                    console.error('[AutoDirector Worker] Deshake fallback stabilization failed:', err);
-                }
-            }
-        }
-        // Apply G5.2A AI Super-Resolution (Neural Upscaling) if requested
-        if (mqSettings?.neuralUpscale) {
-            console.log(`[AutoDirector Worker] AI Neural Upscaling is requested (${mqSettings.aiUpscaleFactor || '2x'}).`);
-            aiDiagnostics.aiEnabled = true;
-            const aiUpscaledPath = path.join(tmpDir, `input-ai-upscaled-${job.jobId}.mp4`);
-            const projectDuration = payload.projectDuration || '10s';
-            const result = await (0, aiUpscaler_1.runNeuralUpscale)(localInputPath, aiUpscaledPath, mqSettings, payload.outputGcsUrl, tmpDir, projectDuration, job.jobId, rawFileHash);
-            aiDiagnostics.cacheHit = result.cacheHit;
-            aiDiagnostics.provider = result.provider;
-            aiDiagnostics.aiDuration = result.duration;
-            aiDiagnostics.actualCost = result.cost;
-            // Calculate estimated cost for diagnostics
-            const estDurationSec = projectDuration === '5s' ? 5 : 10;
-            const estRate = (mqSettings.aiUpscaleFactor || '2x') === '2x' ? 0.05 : 0.07;
-            aiDiagnostics.estimatedCost = estDurationSec * estRate;
-            if (result.success && fs.existsSync(aiUpscaledPath)) {
-                console.log(`[AutoDirector Worker] AI Upscaling succeeded. Using upscaled clip as input.`);
-                localInputPath = aiUpscaledPath;
-                job.activeFiles.push(aiUpscaledPath);
-                enhancementsApplied.push(`AI Super-Resolution (${mqSettings.aiUpscaleFactor || '2x'})`);
-                // Resolve final resolution for diagnostics
-                try {
-                    const meta = parseVideoMetadata(aiUpscaledPath);
-                    aiDiagnostics.finalResolution = `${meta.width}x${meta.height}`;
-                }
-                catch {
-                    aiDiagnostics.finalResolution = mqSettings.aiUpscaleFactor === '4x' ? '3840x2160' : '1920x1080';
-                }
-            }
-            else {
-                console.warn(`[AutoDirector Worker] AI Upscaling fell back to classical. Reason: ${result.fallbackReason || result.error}`);
-                aiDiagnostics.fallbackReason = result.fallbackReason || result.error || 'Unknown error';
-                // Perform classical fallback to Lanczos / Unsharp
-                const classicalUpscaledPath = path.join(tmpDir, `input-classical-upscaled-${job.jobId}.mp4`);
-                console.log(`[AutoDirector Worker] Executing classical Lanczos fallback upscale to ${classicalUpscaledPath}`);
-                try {
-                    const isVert = videoMetadata.height > videoMetadata.width;
-                    const targetW = (mqSettings.aiUpscaleFactor || '2x') === '4x' ? (isVert ? 2160 : 3840) : (isVert ? 1080 : 1920);
-                    const targetH = (mqSettings.aiUpscaleFactor || '2x') === '4x' ? (isVert ? 3840 : 2160) : (isVert ? 1920 : 1080);
-                    await runCommandAsync(getFfmpegCommand(), [
-                        '-y',
-                        '-i', localInputPath,
-                        '-vf', `scale=w=${targetW}:h=${targetH}:flags=lanczos,unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.6`,
-                        '-c:v', 'libx264',
-                        '-crf', '17',
-                        '-preset', 'superfast',
-                        classicalUpscaledPath
-                    ], job);
-                    localInputPath = classicalUpscaledPath;
-                    job.activeFiles.push(classicalUpscaledPath);
-                    enhancementsApplied.push('Classical Lanczos Upscaling (Fallback)');
-                    aiDiagnostics.finalResolution = `${targetW}x${targetH}`;
-                }
-                catch (fallbackErr) {
-                    console.error(`[AutoDirector Worker] Classical fallback upscale failed:`, fallbackErr);
-                }
-            }
-        }
+        mqSettings = payload.blueprint.max_quality_settings || null;
+        // Extract transients and conform timeline early for duration check and disk space estimate
         let transients = [];
         if (localSoundtrackPath && fs.existsSync(localSoundtrackPath)) {
-            const analysis = await (0, audioAnalysis_1.extractAudioTransients)(localSoundtrackPath);
-            transients = analysis.transients;
+            const transientsStart = Date.now();
+            const transientsAnalysis = await (0, audioAnalysis_1.extractAudioTransients)(localSoundtrackPath);
+            transients = transientsAnalysis.transients;
+            console.log(`[AutoDirector Worker] Audio transients extracted in ${((Date.now() - transientsStart) / 1000).toFixed(1)}s.`);
         }
         let currentStart = 0.0;
         const initialTimeline = [];
@@ -880,6 +804,232 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
                 }];
         }
         const totalDuration = conformedTimeline.reduce((acc, b) => acc + (b.end - b.start) / b.speed, 0);
+        // Enforce 8K / 16K experimental opt-in safeguards
+        // Guard 1: Strict numeric duration validation
+        if (mqSettings?.resolution === '8K' && totalDuration > 10) {
+            throw new Error(`8K export is restricted to clips under 10 seconds. (Current clip duration: ${totalDuration.toFixed(1)}s)`);
+        }
+        if (mqSettings?.resolution === '16K' && totalDuration > 5) {
+            throw new Error(`16K export is restricted to clips under 5 seconds. (Current clip duration: ${totalDuration.toFixed(1)}s)`);
+        }
+        // Guard 2: Preflight disk space estimation check
+        const stats = fs.statSync(localInputPath);
+        const inputSize = stats.size;
+        let targetBitrateBps = 5 * 1000 * 1000;
+        if (mqSettings?.resolution === '16K') {
+            targetBitrateBps = payload.blueprint.export?.codec === 'hevc' ? 120 * 1000 * 1000 : 200 * 1000 * 1000;
+        }
+        else if (mqSettings?.resolution === '8K') {
+            targetBitrateBps = payload.blueprint.export?.codec === 'hevc' ? 50 * 1000 * 1000 : 80 * 1000 * 1000;
+        }
+        else if (mqSettings?.resolution === '4K') {
+            targetBitrateBps = payload.blueprint.export?.codec === 'hevc' ? 15 * 1000 * 1000 : 25 * 1000 * 1000;
+        }
+        estOutputSize = Math.round((targetBitrateBps * totalDuration) / 8);
+        const safetyBufferBytes = mqSettings?.resolution === '16K' ? 2048 * 1024 * 1024 : 200 * 1024 * 1024;
+        const estRequiredBytes = (inputSize * 3) + (estOutputSize * 3) + safetyBufferBytes;
+        const preflightDiskInfo = checkFreeDiskSpace();
+        if (preflightDiskInfo.freeBytes < estRequiredBytes) {
+            throw new Error(`Preflight storage check failed. Estimated space needed: ${(estRequiredBytes / 1024 / 1024).toFixed(1)}MB, free space: ${(preflightDiskInfo.freeBytes / 1024 / 1024).toFixed(1)}MB.`);
+        }
+        // Guard 3: Preflight free memory check
+        const os = require('os');
+        const freeMem = os.freemem();
+        let requiredFreeMemBytes = 300 * 1024 * 1024;
+        if (mqSettings?.resolution === '16K') {
+            requiredFreeMemBytes = 6.0 * 1024 * 1024 * 1024; // 6.0GB
+        }
+        else if (mqSettings?.resolution === '8K') {
+            requiredFreeMemBytes = 1.5 * 1024 * 1024 * 1024; // 1.5GB
+        }
+        else if (mqSettings?.resolution === '4K') {
+            requiredFreeMemBytes = 800 * 1024 * 1024; // 800MB
+        }
+        if (freeMem < requiredFreeMemBytes) {
+            throw new Error(`Preflight memory check failed. Required free memory: ${(requiredFreeMemBytes / 1024 / 1024).toFixed(1)}MB, available: ${(freeMem / 1024 / 1024).toFixed(1)}MB.`);
+        }
+        const aiDiagnostics = {
+            aiEnabled: false,
+            cacheHit: false,
+            provider: 'none',
+            fallbackReason: undefined,
+            aiDuration: 0,
+            estimatedCost: 0,
+            actualCost: 0,
+            finalResolution: ''
+        };
+        if (mqSettings?.stabilization) {
+            console.log(`[AutoDirector Worker] Stabilization is enabled. Running pre-stabilization...`);
+            const stabilizedPath = path.join(tmpDir, `input-stabilized-${job.jobId}.mp4`);
+            // Probe if vidstab is compiled
+            let hasVidstab = false;
+            try {
+                const filtersOutput = (0, child_process_1.execSync)(`"${getFfmpegCommand()}" -filters`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+                hasVidstab = filtersOutput.includes('vidstabdetect') && filtersOutput.includes('vidstabtransform');
+            }
+            catch { }
+            if (hasVidstab) {
+                console.log(`[AutoDirector Worker] Using vidstab for stabilization.`);
+                const trfPath = path.join(tmpDir, `transforms-${job.jobId}.trf`);
+                const trfPathRelative = path.relative(process.cwd(), trfPath).replace(/\\/g, '/');
+                try {
+                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', `vidstabdetect=shakiness=5:accuracy=10:result=${trfPathRelative}`, '-f', 'null', '-'], job);
+                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', `vidstabtransform=input=${trfPathRelative}:smoothing=15:interpol=linear`, '-c:v', 'libx264', '-crf', '17', '-preset', 'superfast', stabilizedPath], job);
+                    if (fs.existsSync(trfPath))
+                        fs.unlinkSync(trfPath);
+                    localInputPath = stabilizedPath;
+                    job.activeFiles.push(stabilizedPath);
+                    enhancementsApplied.push('VidStab Stabilization');
+                }
+                catch (err) {
+                    console.error('[AutoDirector Worker] vidstab stabilization failed, falling back to deshake:', err);
+                    if (fs.existsSync(trfPath))
+                        fs.unlinkSync(trfPath);
+                }
+            }
+            if (localInputPath !== stabilizedPath) {
+                // Fallback to deshake if vidstab wasn't compiled or failed
+                console.log(`[AutoDirector Worker] Falling back to deshake filter.`);
+                try {
+                    await runCommandAsync(getFfmpegCommand(), ['-y', '-i', localInputPath, '-vf', 'deshake', '-c:v', 'libx264', '-crf', '17', '-preset', 'superfast', stabilizedPath], job);
+                    localInputPath = stabilizedPath;
+                    job.activeFiles.push(stabilizedPath);
+                    enhancementsApplied.push('Deshake Stabilization');
+                }
+                catch (err) {
+                    console.error('[AutoDirector Worker] Deshake fallback stabilization failed:', err);
+                }
+            }
+        }
+        // Apply G5.4B Face Restoration if requested
+        if (mqSettings?.faceRestoration) {
+            console.log(`[AutoDirector Worker] Face Restoration is requested.`);
+            faceDiagnostics.enabled = true;
+            faceDiagnostics.fidelitySetting = mqSettings.faceFidelity ?? 0.6;
+            faceDiagnostics.privacyCacheTtlDays = mqSettings.faceCacheTtlDays ?? 7;
+            const faceRestoredPath = path.join(tmpDir, `input-face-restored-${job.jobId}.mp4`);
+            const projectDuration = payload.projectDuration || '10s';
+            try {
+                const result = await (0, aiUpscaler_1.runFaceRestoration)(localInputPath, faceRestoredPath, mqSettings, payload.outputGcsUrl, tmpDir, projectDuration, job.jobId, rawFileHash);
+                faceDiagnostics.cacheHit = result.cacheHit;
+                faceDiagnostics.provider = result.provider;
+                faceDiagnostics.modelVersion = result.modelVersion;
+                faceDiagnostics.facesDetected = result.facesDetected;
+                faceDiagnostics.framesProcessed = result.framesProcessed;
+                faceDiagnostics.budgetUsed = result.cost;
+                faceDiagnostics.fallbackReason = result.fallbackReason;
+                if (result.success && fs.existsSync(faceRestoredPath)) {
+                    console.log(`[AutoDirector Worker] Face Restoration succeeded. Using restored clip as input.`);
+                    localInputPath = faceRestoredPath;
+                    job.activeFiles.push(faceRestoredPath);
+                    enhancementsApplied.push('Face Restoration (GFPGAN v1.4)');
+                }
+                else {
+                    console.warn(`[AutoDirector Worker] Face Restoration fell back to classical unsharp. Reason: ${result.fallbackReason}`);
+                    const sharpenedPath = path.join(tmpDir, `input-sharpened-${job.jobId}.mp4`);
+                    try {
+                        await runCommandAsync(getFfmpegCommand(), [
+                            '-y',
+                            '-i', localInputPath,
+                            '-vf', 'unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.6',
+                            '-c:v', 'libx264',
+                            '-crf', '17',
+                            '-preset', 'superfast',
+                            '-c:a', 'copy',
+                            sharpenedPath
+                        ], job);
+                        localInputPath = sharpenedPath;
+                        job.activeFiles.push(sharpenedPath);
+                        enhancementsApplied.push('Classical Face Sharpening (Fallback)');
+                    }
+                    catch (sharpErr) {
+                        console.error(`[AutoDirector Worker] Classical face sharpening fallback failed:`, sharpErr);
+                    }
+                }
+            }
+            catch (err) {
+                console.error(`[AutoDirector Worker] Face Restoration failed:`, err);
+                faceDiagnostics.fallbackReason = err.message;
+                const sharpenedPath = path.join(tmpDir, `input-sharpened-${job.jobId}.mp4`);
+                try {
+                    await runCommandAsync(getFfmpegCommand(), [
+                        '-y',
+                        '-i', localInputPath,
+                        '-vf', 'unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.6',
+                        '-c:v', 'libx264',
+                        '-crf', '17',
+                        '-preset', 'superfast',
+                        '-c:a', 'copy',
+                        sharpenedPath
+                    ], job);
+                    localInputPath = sharpenedPath;
+                    job.activeFiles.push(sharpenedPath);
+                    enhancementsApplied.push('Classical Face Sharpening (Fallback)');
+                }
+                catch (sharpErr) {
+                    console.error(`[AutoDirector Worker] Classical face sharpening fallback failed:`, sharpErr);
+                }
+            }
+        }
+        // Apply G5.2A AI Super-Resolution (Neural Upscaling) if requested
+        if (mqSettings?.neuralUpscale) {
+            console.log(`[AutoDirector Worker] AI Neural Upscaling is requested (${mqSettings.aiUpscaleFactor || '2x'}).`);
+            aiDiagnostics.aiEnabled = true;
+            const aiUpscaledPath = path.join(tmpDir, `input-ai-upscaled-${job.jobId}.mp4`);
+            const projectDuration = payload.projectDuration || '10s';
+            const result = await (0, aiUpscaler_1.runNeuralUpscale)(localInputPath, aiUpscaledPath, mqSettings, payload.outputGcsUrl, tmpDir, projectDuration, job.jobId, rawFileHash);
+            aiDiagnostics.cacheHit = result.cacheHit;
+            aiDiagnostics.provider = result.provider;
+            aiDiagnostics.aiDuration = result.duration;
+            aiDiagnostics.actualCost = result.cost;
+            // Calculate estimated cost for diagnostics
+            const estDurationSec = projectDuration === '5s' ? 5 : 10;
+            const estRate = (mqSettings.aiUpscaleFactor || '2x') === '2x' ? 0.05 : 0.07;
+            aiDiagnostics.estimatedCost = estDurationSec * estRate;
+            if (result.success && fs.existsSync(aiUpscaledPath)) {
+                console.log(`[AutoDirector Worker] AI Upscaling succeeded. Using upscaled clip as input.`);
+                localInputPath = aiUpscaledPath;
+                job.activeFiles.push(aiUpscaledPath);
+                enhancementsApplied.push(`AI Super-Resolution (${mqSettings.aiUpscaleFactor || '2x'})`);
+                // Resolve final resolution for diagnostics
+                try {
+                    const meta = parseVideoMetadata(aiUpscaledPath);
+                    aiDiagnostics.finalResolution = `${meta.width}x${meta.height}`;
+                }
+                catch {
+                    aiDiagnostics.finalResolution = mqSettings.aiUpscaleFactor === '4x' ? '3840x2160' : '1920x1080';
+                }
+            }
+            else {
+                console.warn(`[AutoDirector Worker] AI Upscaling fell back to classical. Reason: ${result.fallbackReason || result.error}`);
+                aiDiagnostics.fallbackReason = result.fallbackReason || result.error || 'Unknown error';
+                // Perform classical fallback to Lanczos / Unsharp
+                const classicalUpscaledPath = path.join(tmpDir, `input-classical-upscaled-${job.jobId}.mp4`);
+                console.log(`[AutoDirector Worker] Executing classical Lanczos fallback upscale to ${classicalUpscaledPath}`);
+                try {
+                    const isVert = videoMetadata.height > videoMetadata.width;
+                    const targetW = (mqSettings.aiUpscaleFactor || '2x') === '4x' ? (isVert ? 2160 : 3840) : (isVert ? 1080 : 1920);
+                    const targetH = (mqSettings.aiUpscaleFactor || '2x') === '4x' ? (isVert ? 3840 : 2160) : (isVert ? 1920 : 1080);
+                    await runCommandAsync(getFfmpegCommand(), [
+                        '-y',
+                        '-i', localInputPath,
+                        '-vf', `scale=w=${targetW}:h=${targetH}:flags=lanczos,unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.6`,
+                        '-c:v', 'libx264',
+                        '-crf', '17',
+                        '-preset', 'superfast',
+                        classicalUpscaledPath
+                    ], job);
+                    localInputPath = classicalUpscaledPath;
+                    job.activeFiles.push(classicalUpscaledPath);
+                    enhancementsApplied.push('Classical Lanczos Upscaling (Fallback)');
+                    aiDiagnostics.finalResolution = `${targetW}x${targetH}`;
+                }
+                catch (fallbackErr) {
+                    console.error(`[AutoDirector Worker] Classical fallback upscale failed:`, fallbackErr);
+                }
+            }
+        }
+        // conformedTimeline and totalDuration have been computed early at Stage 2
         // Resolve sound design config
         let soundEvents = payload.blueprint.audio?.events || [];
         let soundSettings = payload.blueprint.audio?.settings || {
@@ -965,6 +1115,14 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
             targetW = isPortrait ? 2160 : 3840;
             targetH = isPortrait ? 3840 : 2160;
         }
+        else if (targetRes === '8K') {
+            targetW = isPortrait ? 4320 : 7680;
+            targetH = isPortrait ? 7680 : 4320;
+        }
+        else if (targetRes === '16K') {
+            targetW = isPortrait ? 8640 : 15360;
+            targetH = isPortrait ? 15360 : 8640;
+        }
         const filterParts = [];
         if (mqSettings?.denoise) {
             filterParts.push('hqdn3d=luma_spatial=4:chroma_spatial=3');
@@ -983,6 +1141,12 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
         if (targetRes === '4K') {
             enhancementsApplied.push('Lanczos Upscale to 4K');
         }
+        else if (targetRes === '8K') {
+            enhancementsApplied.push(aiDiagnostics.aiEnabled ? 'AI Super-Resolution 2x + Lanczos Upscale to 8K' : 'Lanczos Upscale to 8K');
+        }
+        else if (targetRes === '16K') {
+            enhancementsApplied.push('Lanczos Upscale to 16K');
+        }
         else if (targetRes === '720p') {
             enhancementsApplied.push('Downscale to 720p');
         }
@@ -991,10 +1155,27 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
                 enhancementsApplied.push('Conformed to 1080p');
             }
         }
-        // Adjust bitrates for 4K exports to guarantee visual excellence
+        // Adjust bitrates for 4K & 8K exports to guarantee visual excellence
         let activeCodec = codec;
         let activeBitrateArgs = [...bitrateArgs];
-        if (targetRes === '4K') {
+        if (targetRes === '16K') {
+            activeCodec = payload.blueprint.export?.codec === 'hevc' ? 'libx265' : 'libx264';
+            if (payload.blueprint.export?.codec === 'hevc') {
+                activeBitrateArgs = ['-b:v', '120M', '-maxrate', '150M', '-bufsize', '250M'];
+            }
+            else {
+                activeBitrateArgs = ['-b:v', '200M', '-maxrate', '250M', '-bufsize', '400M'];
+            }
+        }
+        else if (targetRes === '8K') {
+            if (payload.blueprint.export?.codec === 'hevc') {
+                activeBitrateArgs = ['-b:v', '50M', '-maxrate', '60M', '-bufsize', '100M'];
+            }
+            else {
+                activeBitrateArgs = ['-b:v', '80M', '-maxrate', '100M', '-bufsize', '150M'];
+            }
+        }
+        else if (targetRes === '4K') {
             if (payload.blueprint.export?.codec === 'hevc') {
                 activeBitrateArgs = ['-b:v', '15M', '-maxrate', '20M', '-bufsize', '35M'];
             }
@@ -1002,9 +1183,17 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
                 activeBitrateArgs = ['-b:v', '25M', '-maxrate', '30M', '-bufsize', '50M'];
             }
         }
+        if (targetRes === '8K') {
+            const isQsvConfigured = payload.blueprint.export?.codec === 'hevc' ? isHevcQsvSupported : isH264QsvSupported;
+            encoderPathUsed = isQsvConfigured ? 'QSV' : 'Software';
+        }
+        else if (targetRes === '16K') {
+            encoderPathUsed = 'Software';
+        }
         const hasEnhancements = mqSettings && (mqSettings.denoise || mqSettings.sharpen || mqSettings.colorRecovery || targetRes !== '1080p');
         if (hasEnhancements && fs.existsSync(localRawOutputPath)) {
             console.log(`[AutoDirector Worker] Enhancements found. Building enhancement pass command with filters: ${filterParts.join(',')}`);
+            const threadArgs = targetRes === '16K' ? ['-threads', '4'] : [];
             const enhanceArgs = [
                 '-y',
                 '-i', localRawOutputPath,
@@ -1012,13 +1201,39 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
                 '-c:v', activeCodec,
                 ...activeBitrateArgs,
                 '-preset', 'veryfast',
+                ...threadArgs,
                 '-pix_fmt', 'yuv420p',
                 '-movflags', '+faststart',
                 '-c:a', 'copy',
                 localOutputPath
             ];
-            // Run FFmpeg enhancement asynchronously
-            await runCommandAsync(getFfmpegCommand(), enhanceArgs, job);
+            try {
+                await runCommandAsync(getFfmpegCommand(), enhanceArgs, job);
+            }
+            catch (err) {
+                // Fallback for QSV encoding at 8K if configured and fails
+                if (targetRes === '8K' && (activeCodec === 'h264_qsv' || activeCodec === 'hevc_qsv')) {
+                    console.warn(`[AutoDirector Worker] QSV encoder ${activeCodec} failed at 8K. Retrying with software encoder...`);
+                    activeCodec = activeCodec === 'hevc_qsv' ? 'libx265' : 'libx264';
+                    encoderPathUsed = 'Software';
+                    const softwareEnhanceArgs = [
+                        '-y',
+                        '-i', localRawOutputPath,
+                        '-vf', filterParts.join(','),
+                        '-c:v', activeCodec,
+                        ...activeBitrateArgs,
+                        '-preset', 'veryfast',
+                        '-pix_fmt', 'yuv420p',
+                        '-movflags', '+faststart',
+                        '-c:a', 'copy',
+                        localOutputPath
+                    ];
+                    await runCommandAsync(getFfmpegCommand(), softwareEnhanceArgs, job);
+                }
+                else {
+                    throw err;
+                }
+            }
         }
         else {
             console.log(`[AutoDirector Worker] No enhancements selected or default 1080p target. Moving conformed file directly.`);
@@ -1070,7 +1285,34 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
                     actualCost: aiDiagnostics.actualCost,
                     duration: aiDiagnostics.aiDuration,
                     finalResolution: aiDiagnostics.finalResolution
+                },
+                faceDiagnostics: {
+                    enabled: faceDiagnostics.enabled,
+                    provider: faceDiagnostics.provider,
+                    modelVersion: faceDiagnostics.modelVersion,
+                    cacheHit: faceDiagnostics.cacheHit,
+                    facesDetected: faceDiagnostics.facesDetected,
+                    framesProcessed: faceDiagnostics.framesProcessed,
+                    budgetUsed: faceDiagnostics.budgetUsed,
+                    fallbackReason: faceDiagnostics.fallbackReason,
+                    fidelitySetting: faceDiagnostics.fidelitySetting,
+                    privacyCacheTtlDays: faceDiagnostics.privacyCacheTtlDays
                 }
+            },
+            exportDiagnostics: {
+                requestedResolution: mqSettings?.resolution || '1080p',
+                actualResolution: `${targetW}x${targetH}`,
+                upscalePath: mqSettings?.resolution === '16K'
+                    ? 'Lanczos Upscale to 16K'
+                    : mqSettings?.resolution === '8K'
+                        ? (aiDiagnostics.aiEnabled ? 'AI Super-Resolution 2x + Lanczos Upscale to 8K' : 'Lanczos Upscale to 8K')
+                        : (mqSettings?.resolution === '4K' ? 'Lanczos Upscale to 4K' : 'Lanczos'),
+                estimatedFileSize: estOutputSize,
+                actualFileSize: outputSize,
+                renderDuration: renderDuration + enhancementDuration,
+                memoryDiskGuardResult: 'Passed',
+                encoderPathUsed: encoderPathUsed,
+                fallbackReason: undefined
             }
         };
         console.log(`[Queue] Render Job ${job.jobId} completed successfully in ${totalJobDuration.toFixed(1)}s.`);
@@ -1086,11 +1328,56 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
         const errorMsg = error.message;
         console.error(`[Queue] Render Job ${job.jobId} failed:`, errorMsg);
         const endedAt = Date.now();
+        // Check if error is from preflight storage or memory or duration
+        const isPreflightBlock = errorMsg.includes('storage') || errorMsg.includes('memory') || errorMsg.includes('8K export is restricted') || errorMsg.includes('16K export is restricted');
+        const guardResult = isPreflightBlock ? 'Failed/Blocked' : 'Passed';
         job.diagnostics = {
             ...job.diagnostics,
             totalDuration: (endedAt - (job.startedAt ?? job.addedAt)) / 1000,
             error: errorMsg
         };
+        if (mqSettings) {
+            job.diagnostics.qualityDiagnostics = {
+                enhancementsApplied,
+                aiDiagnostics: {
+                    enabled: aiDiagnostics.aiEnabled,
+                    cacheHit: aiDiagnostics.cacheHit,
+                    provider: aiDiagnostics.provider,
+                    fallbackReason: aiDiagnostics.fallbackReason,
+                    estimatedCost: aiDiagnostics.estimatedCost,
+                    actualCost: aiDiagnostics.actualCost,
+                    duration: aiDiagnostics.aiDuration,
+                    finalResolution: aiDiagnostics.finalResolution
+                },
+                faceDiagnostics: {
+                    enabled: faceDiagnostics.enabled,
+                    provider: faceDiagnostics.provider,
+                    modelVersion: faceDiagnostics.modelVersion,
+                    cacheHit: faceDiagnostics.cacheHit,
+                    facesDetected: faceDiagnostics.facesDetected,
+                    framesProcessed: faceDiagnostics.framesProcessed,
+                    budgetUsed: faceDiagnostics.budgetUsed,
+                    fallbackReason: faceDiagnostics.fallbackReason,
+                    fidelitySetting: faceDiagnostics.fidelitySetting,
+                    privacyCacheTtlDays: faceDiagnostics.privacyCacheTtlDays
+                }
+            };
+            job.diagnostics.exportDiagnostics = {
+                requestedResolution: mqSettings.resolution || '1080p',
+                actualResolution: 'Unknown',
+                upscalePath: mqSettings.resolution === '16K'
+                    ? 'Lanczos Upscale to 16K'
+                    : mqSettings.resolution === '8K'
+                        ? (aiDiagnostics.aiEnabled ? 'AI Super-Resolution 2x + Lanczos Upscale to 8K' : 'Lanczos Upscale to 8K')
+                        : (mqSettings.resolution === '4K' ? 'Lanczos Upscale to 4K' : 'Lanczos'),
+                estimatedFileSize: estOutputSize,
+                actualFileSize: 0,
+                renderDuration: 0,
+                memoryDiskGuardResult: guardResult,
+                encoderPathUsed: encoderPathUsed || 'Unknown',
+                fallbackReason: isPreflightBlock ? errorMsg : undefined
+            };
+        }
         await queue_1.renderQueueManager.notifyProgress(job, 100, 'FAILED', errorMsg);
         if (job.reject)
             job.reject(error);

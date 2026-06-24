@@ -59,6 +59,29 @@ export interface RenderJob {
         duration?: number;
         finalResolution?: string;
       };
+      faceDiagnostics?: {
+        enabled: boolean;
+        provider: string;
+        modelVersion: string;
+        cacheHit: boolean;
+        facesDetected: number;
+        framesProcessed: number;
+        budgetUsed: number;
+        fallbackReason?: string;
+        fidelitySetting: number;
+        privacyCacheTtlDays: number;
+      };
+    };
+    exportDiagnostics?: {
+      requestedResolution: string;
+      actualResolution: string;
+      upscalePath: string;
+      estimatedFileSize: number;
+      actualFileSize: number;
+      renderDuration: number;
+      memoryDiskGuardResult: 'Passed' | 'Failed/Blocked';
+      encoderPathUsed: string;
+      fallbackReason?: string;
     };
   };
   resolve?: (value: any) => void;
@@ -272,20 +295,34 @@ class QueueManager {
    * If any active render has neuralUpscale enabled, we throttle concurrency to 1.
    */
   private getMaxConcurrentRenders(): number {
-    let hasActiveAiJob = false;
+    let throttleNeeded = false;
+    let throttleReason = '';
     for (const activeJob of this.activeRenders.values()) {
       const mq = activeJob.reqBody?.blueprint?.max_quality_settings;
       if (mq?.neuralUpscale === true) {
-        hasActiveAiJob = true;
+        throttleNeeded = true;
+        throttleReason = 'Active AI upscale job';
+        break;
+      }
+      if (mq?.resolution === '8K' || mq?.resolution === '16K') {
+        throttleNeeded = true;
+        throttleReason = `Active ${mq.resolution} export job`;
         break;
       }
     }
-
-    if (hasActiveAiJob) {
-      console.log('[Queue] Active AI upscale job detected. Throttling render concurrency to 1.');
+    if (throttleNeeded) {
+      console.log(`[Queue] ${throttleReason} detected. Throttling render concurrency to 1.`);
       return 1;
     }
-
+    // Check next queued job
+    if (this.activeRenders.size > 0 && this.renderQueue.length > 0) {
+      const nextJob = this.renderQueue[0];
+      const nextMq = nextJob.reqBody?.blueprint?.max_quality_settings;
+      if (nextMq?.neuralUpscale === true || nextMq?.resolution === '8K' || nextMq?.resolution === '16K') {
+        console.log(`[Queue] Next job in queue is AI or ${nextMq?.resolution || 'high-res'}. Throttling render concurrency to 1.`);
+        return 1;
+      }
+    }
     return Number(process.env.MAX_CONCURRENT_RENDERS ?? 2);
   }
 

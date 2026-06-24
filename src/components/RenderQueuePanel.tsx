@@ -116,6 +116,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
         } else if (nextStatus === 'failed') {
           setStep('FAILED');
           setErrorMsg(nextError || 'Rendering process aborted unexpectedly.');
+          setDiagnostics(data.diagnostics || null);
           stopPolling();
           updateParentProject('Inactive');
         } else if (nextStatus === 'queued') {
@@ -174,7 +175,70 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
     }
   };
 
-  const triggerRender = async () => {
+  const handleRenderAt4KInstead = async () => {
+    const updated: Project = {
+      ...project,
+      blueprint: {
+        ...project.blueprint,
+        maxQualitySettings: {
+          stabilization: false,
+          denoise: false,
+          sharpen: false,
+          colorRecovery: false,
+          upscaleFactor: 'none',
+          neuralUpscale: false,
+          aiUpscaleFactor: 'none',
+          aiBudgetCap: 1.0,
+          faceRestoration: false,
+          ...project.blueprint.maxQualitySettings,
+          resolution: '4K' as const
+        }
+      }
+    };
+    try {
+      await updateProject(updated);
+    } catch (e) {
+      console.error('Failed to update project resolution to 4K:', e);
+    }
+    if (onStatusChange) {
+      onStatusChange(updated);
+    }
+    await triggerRender(updated);
+  };
+
+  const handleRenderAt8KInstead = async () => {
+    const updated: Project = {
+      ...project,
+      blueprint: {
+        ...project.blueprint,
+        maxQualitySettings: {
+          stabilization: false,
+          denoise: false,
+          sharpen: false,
+          colorRecovery: false,
+          upscaleFactor: 'none',
+          neuralUpscale: false,
+          aiUpscaleFactor: 'none',
+          aiBudgetCap: 1.0,
+          faceRestoration: false,
+          ...project.blueprint.maxQualitySettings,
+          resolution: '8K' as const
+        }
+      }
+    };
+    try {
+      await updateProject(updated);
+    } catch (e) {
+      console.error('Failed to update project resolution to 8K:', e);
+    }
+    if (onStatusChange) {
+      onStatusChange(updated);
+    }
+    await triggerRender(updated);
+  };
+
+  const triggerRender = async (overrideProject?: Project | React.MouseEvent) => {
+    const activeProject = (overrideProject && 'id' in overrideProject) ? overrideProject : project;
     setStep('DOWNLOADING');
     setPercent(2);
     setEstTime(15);
@@ -202,7 +266,7 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
       const response = await fetch('/api/render', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ project }),
+        body: JSON.stringify({ project: activeProject }),
       });
 
       const data = await response.json();
@@ -510,6 +574,53 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
                           )}
                         </div>
                       )}
+
+                      {/* G5.3A 8K / MaxQuality Export Diagnostics Report */}
+                      {diagnostics.exportDiagnostics && (
+                        <div className="mt-2 pt-2 border-t border-white/5 flex flex-col gap-1.5 text-[9px] text-gray-400">
+                          <span className="text-brand-cyan font-bold text-[7px] tracking-wider uppercase">Export Diagnostics</span>
+                          <div className="flex justify-between">
+                            <span>Requested Resolution:</span>
+                            <span className="text-gray-200 font-semibold">{diagnostics.exportDiagnostics.requestedResolution}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Actual Resolution:</span>
+                            <span className="text-gray-200 font-semibold">{diagnostics.exportDiagnostics.actualResolution}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Upscale Path:</span>
+                            <span className="text-gray-200">{diagnostics.exportDiagnostics.upscalePath}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Estimated File Size:</span>
+                            <span className="text-gray-200">{(diagnostics.exportDiagnostics.estimatedFileSize / 1024 / 1024).toFixed(2)} MB</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Actual File Size:</span>
+                            <span className="text-gray-200">{(diagnostics.exportDiagnostics.actualFileSize / 1024 / 1024).toFixed(2)} MB</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Render Duration:</span>
+                            <span className="text-gray-200">{diagnostics.exportDiagnostics.renderDuration.toFixed(1)}s</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Encoder Path:</span>
+                            <span className="text-gray-200">{diagnostics.exportDiagnostics.encoderPathUsed}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Safety Guard Result:</span>
+                            <span className={diagnostics.exportDiagnostics.memoryDiskGuardResult === 'Passed' ? 'text-brand-green font-bold' : 'text-brand-magenta font-bold'}>
+                              {diagnostics.exportDiagnostics.memoryDiskGuardResult}
+                            </span>
+                          </div>
+                          {diagnostics.exportDiagnostics.fallbackReason && (
+                            <div className="flex flex-col gap-0.5 mt-1 p-1 bg-red-950/20 border border-red-500/20 text-[8px] text-brand-magenta rounded">
+                              <span className="font-bold uppercase">Block/Fallback Reason:</span>
+                              <span>{diagnostics.exportDiagnostics.fallbackReason}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -563,11 +674,63 @@ export default function RenderQueuePanel({ project, onStatusChange, onCreditExha
               </div>
             </div>
             
+            {/* Render 8K diagnostics if available on failure */}
+            {diagnostics?.exportDiagnostics && (
+              <div className="p-4 rounded-lg bg-white/[0.02] border border-white/10 flex flex-col gap-1.5 text-[10px] text-gray-400">
+                <span className="text-brand-cyan uppercase font-bold text-[8px] tracking-wider mb-1">Export Diagnostics</span>
+                <div className="flex justify-between">
+                  <span>Requested Resolution:</span>
+                  <span className="text-gray-200 font-semibold">{diagnostics.exportDiagnostics.requestedResolution}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Safety Guard Result:</span>
+                  <span className="text-brand-magenta font-bold">{diagnostics.exportDiagnostics.memoryDiskGuardResult}</span>
+                </div>
+                {diagnostics.exportDiagnostics.fallbackReason && (
+                  <div className="flex flex-col gap-0.5 mt-1 p-2 bg-red-950/20 border border-red-500/20 text-brand-magenta rounded">
+                    <span className="font-bold uppercase text-[8px]">Block Reason:</span>
+                    <span>{diagnostics.exportDiagnostics.fallbackReason}</span>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Show "Render at 8K/4K instead" options if 16K preflight failed */}
+            {diagnostics?.exportDiagnostics?.requestedResolution === '16K' && 
+             diagnostics?.exportDiagnostics?.memoryDiskGuardResult === 'Failed/Blocked' && (
+              <div className="flex flex-col gap-2 w-full">
+                <button
+                  onClick={handleRenderAt8KInstead}
+                  className="w-full py-2.5 rounded-lg bg-brand-green text-space-black font-bold hover:bg-brand-green/90 transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_10px_rgba(46,213,115,0.2)] text-xs"
+                >
+                  <Cpu className="w-4 h-4" /> Render at 8K instead
+                </button>
+                <button
+                  onClick={handleRenderAt4KInstead}
+                  className="w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/15 text-gray-200 font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer text-xs"
+                >
+                  <Cpu className="w-4 h-4" /> Render at 4K instead
+                </button>
+              </div>
+            )}
+
+            {/* Show "Render at 4K instead" option if 8K preflight failed */}
+            {diagnostics?.exportDiagnostics?.requestedResolution === '8K' && 
+             diagnostics?.exportDiagnostics?.memoryDiskGuardResult === 'Failed/Blocked' && (
+              <button
+                onClick={handleRenderAt4KInstead}
+                className="w-full py-2.5 rounded-lg bg-brand-green text-space-black font-bold hover:bg-brand-green/90 transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_10px_rgba(46,213,115,0.2)] text-xs"
+              >
+                <Cpu className="w-4 h-4" /> Render at 4K instead
+              </button>
+            )}
+
             <button
               onClick={() => {
                 setStep('IDLE');
                 setPercent(0);
                 setErrorMsg(null);
+                setDiagnostics(null);
               }}
               className="w-full py-2.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-gray-200 font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer"
             >

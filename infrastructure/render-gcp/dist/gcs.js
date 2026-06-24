@@ -139,7 +139,7 @@ async function downloadFromGcs(gcsUri, destPath, maxRetries = 3, baseDelayMs = 1
 /**
  * Uploads a local file to GCS or copies it to local Next.js renders directory.
  */
-async function uploadToGcs(localFilePath, targetGcsUri, contentType = 'video/mp4') {
+async function uploadToGcs(localFilePath, targetGcsUri, contentType = 'video/mp4', customMetadata) {
     const client = getStorage();
     if (!client) {
         console.log(`[Local GCS Fallback] Saving rendered output: ${localFilePath} -> ${targetGcsUri}`);
@@ -168,6 +168,7 @@ async function uploadToGcs(localFilePath, targetGcsUri, contentType = 'video/mp4
         destination: key,
         metadata: {
             contentType: contentType,
+            metadata: customMetadata
         },
     });
 }

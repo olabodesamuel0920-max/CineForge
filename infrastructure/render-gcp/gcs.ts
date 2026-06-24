@@ -123,7 +123,8 @@ export async function downloadFromGcs(
 export async function uploadToGcs(
   localFilePath: string,
   targetGcsUri: string,
-  contentType = 'video/mp4'
+  contentType = 'video/mp4',
+  customMetadata?: Record<string, string>
 ): Promise<void> {
   const client = getStorage();
   if (!client) {
@@ -159,6 +160,7 @@ export async function uploadToGcs(
     destination: key,
     metadata: {
       contentType: contentType,
+      metadata: customMetadata
     },
   });
 }

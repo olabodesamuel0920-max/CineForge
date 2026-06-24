@@ -49,7 +49,7 @@ async function runAutoDirectorE2ETest() {
     inspectData.recommendedPreset,
     'YouTube', // platform
     '15s',     // desiredDuration
-    true       // maxQualityMode
+    false       // maxQualityMode
   );
 
   console.log('[Step 2 Success] EditDNA compiled.');

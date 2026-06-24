@@ -128,19 +128,74 @@ export async function POST(request: Request) {
       saturation = 0.35;
     }
 
-    // 3. Map export format configurations
     const isPortrait = project.platform !== 'YouTube';
     const targetResSetting = project.blueprint.maxQualitySettings?.resolution || (project.maxQualityMode ? '4K' : '1080p');
+    const durSec = parseFloat(project.duration) || 0;
+
+    // Face Restoration API validation guards
+    if (project.blueprint.maxQualitySettings?.faceRestoration) {
+      if (durSec > 10) {
+        return NextResponse.json(
+          { success: false, error: 'Face Restoration is restricted to clips under 10 seconds.' },
+          { status: 400 }
+        );
+      }
+      if (targetResSetting === '16K') {
+        return NextResponse.json(
+          { success: false, error: 'Face Restoration is restricted to 8K output. Choose classical MaxQuality or AI upscaling (up to 8K) for face restoration.' },
+          { status: 400 }
+        );
+      }
+      const provider = project.blueprint.maxQualitySettings.faceProvider || 'gfpgan';
+      if (provider.toLowerCase() === 'codeformer') {
+        return NextResponse.json(
+          { success: false, error: 'CodeFormer is blocked in production. Please use approved commercial-safe providers.' },
+          { status: 400 }
+        );
+      }
+      const fidelity = project.blueprint.maxQualitySettings.faceFidelity ?? 0.6;
+      if (fidelity < 0.5 || fidelity > 0.8) {
+        return NextResponse.json(
+          { success: false, error: 'Face Restoration fidelity must be clamped between 0.5 and 0.8.' },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (targetResSetting === '8K' && durSec > 10) {
+      return NextResponse.json(
+        { success: false, error: '8K export is restricted to clips under 10 seconds.' },
+        { status: 400 }
+      );
+    }
+
+    if (targetResSetting === '16K' && durSec > 5) {
+      return NextResponse.json(
+        { success: false, error: '16K export is restricted to clips under 5 seconds.' },
+        { status: 400 }
+      );
+    }
+
+    if (targetResSetting === '16K' && project.blueprint.maxQualitySettings?.neuralUpscale) {
+      return NextResponse.json(
+        { success: false, error: 'AI Super-Resolution is restricted to 8K output. Choose classical MaxQuality for 16K upscale.' },
+        { status: 400 }
+      );
+    }
     
     let resolution = isPortrait ? [1080, 1920] : [1920, 1080];
     if (targetResSetting === '720p') {
       resolution = isPortrait ? [720, 1280] : [1280, 720];
     } else if (targetResSetting === '4K') {
       resolution = isPortrait ? [2160, 3840] : [3840, 2160];
+    } else if (targetResSetting === '8K') {
+      resolution = isPortrait ? [4320, 7680] : [7680, 4320];
+    } else if (targetResSetting === '16K') {
+      resolution = isPortrait ? [8640, 15360] : [15360, 8640];
     }
 
     const fps = project.maxQualityMode ? 60 : 30;
-    const codec = project.maxQualityMode ? 'hevc' : 'h264';
+    const codec = project.blueprint.export?.codec || (project.maxQualityMode ? 'hevc' : 'h264');
 
     // 4. Assemble the Zod-compatible Render Engine Payload
     const isDemo = project.sourceType === 'demo' || project.mediaFilename === 'promo.mp4' || project.mediaFilename === '/uploads/promo.mp4';
