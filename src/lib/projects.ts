@@ -106,7 +106,8 @@ function mapRowToProject(row: any): Project {
         maxQualityPlan: bp.max_quality_plan,
         exportRecommendation: bp.export_recommendation,
         soundDesignSettings: parsedSound.settings,
-        soundEvents: parsedSound.events
+        soundEvents: parsedSound.events,
+        maxQualitySettings: bp.max_quality_settings || undefined
       };
     })() : {
       editTitle: row.title,
@@ -260,7 +261,8 @@ export async function createProject(input: CreateProjectInput, customBlueprint?:
           blueprint.soundEvents || []
         ),
         max_quality_plan: blueprint.maxQualityPlan,
-        export_recommendation: blueprint.exportRecommendation
+        export_recommendation: blueprint.exportRecommendation,
+        max_quality_settings: blueprint.maxQualitySettings
       });
 
     if (blueprintError) {
@@ -331,7 +333,8 @@ export async function updateProject(project: Project): Promise<Project> {
           project.blueprint.soundEvents || []
         ),
         max_quality_plan: project.blueprint.maxQualityPlan,
-        export_recommendation: project.blueprint.exportRecommendation
+        export_recommendation: project.blueprint.exportRecommendation,
+        max_quality_settings: project.blueprint.maxQualitySettings
       })
       .eq('project_id', project.id);
 

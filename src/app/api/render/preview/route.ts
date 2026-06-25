@@ -172,7 +172,15 @@ export async function POST(request: Request) {
         },
         selected_mode: project.selectedMode,
         viewer_emotion: project.blueprint.viewerEmotion,
-        hook_intensity: 0.8 // low intensity for preview
+        hook_intensity: 0.8, // low intensity for preview
+        max_quality_settings: project.blueprint.maxQualitySettings || {
+          stabilization: false,
+          denoise: false,
+          sharpen: false,
+          colorRecovery: false,
+          upscaleFactor: 'none',
+          resolution: '1080p'
+        }
       },
       taskId: project.id,
       outputGcsUrl: `gs://${bucketName}/rendered/output-${project.id}.mp4`,

@@ -286,6 +286,14 @@ export function generateEditDNABlueprint(
     colorGrade: colorGr,
     soundDirection: soundDir,
     maxQualityPlan,
-    exportRecommendation: exportRec
+    exportRecommendation: exportRec,
+    maxQualitySettings: {
+      stabilization: maxQualityMode,
+      denoise: maxQualityMode,
+      sharpen: maxQualityMode,
+      colorRecovery: maxQualityMode,
+      upscaleFactor: 'none',
+      resolution: maxQualityMode ? '4K' : '1080p'
+    }
   };
 }

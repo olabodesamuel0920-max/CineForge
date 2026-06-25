@@ -372,6 +372,16 @@ export default function StudioPage() {
                   onClear={handleClearFile} 
                 />
               </div>
+
+              {videoDuration !== undefined && videoDuration > 10 && (
+                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-400 font-mono flex items-start gap-2.5 animate-fadeIn">
+                  <AlertCircle className="w-4.5 h-4.5 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold uppercase tracking-wider block mb-1">AI Limit Notice</span>
+                    Your uploaded video is {videoDuration.toFixed(1)}s. AI Super-Resolution (upscaling) and Face Restoration are restricted to clips under 10 seconds. Standard MaxQuality enhancements (Denoise, Deblock, and Color Recovery) will still apply. Trim to 5–10 seconds for full AI enhancement.
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Prompt description details */}

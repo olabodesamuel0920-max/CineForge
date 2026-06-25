@@ -107,8 +107,12 @@ export function buildFilterComplex(
   previewDuration?: number,
   soundEvents?: SoundEvent[],
   soundSettings?: SoundDesignSettings,
-  assetIdToInputIndex?: Record<string, number>
+  assetIdToInputIndex?: Record<string, number>,
+  isPortrait: boolean = true
 ): FilterComplexResult {
+  const targetW = isPortrait ? 1080 : 1920;
+  const targetH = isPortrait ? 1920 : 1080;
+
   const filterParts: string[] = [];
   const concatInputs: string[] = [];
 
@@ -217,14 +221,18 @@ export function buildFilterComplex(
 
     // 2. Apply Style-Specific Crop Zoom matrices or Passthrough Conformer (with fast bilinear scale flags)
     if (selectedMode === 'luxury-demon-reveal') {
-      // Luxury Reveal crop pan: slow cinematic drift over time with tight cropping clamped to bounds
-      filterParts.push(`[${vGradeLabel}]crop=w=iw-120:h=ih-213:x='(iw-ow)/2':y='clip((ih-oh)/2 - (t*12*${intensity.toFixed(3)}),0,max(0,ih-oh))',scale=1080:1920:flags=fast_bilinear,setsar=1[${vConformedLabel}]`);
+      // Luxury Reveal crop pan: slow cinematic drift over time with tight cropping clamped to bounds, aspect-ratio safe
+      const ow = `0.85*if(gte(iw/ih,${targetW}/${targetH}),ih*${targetW}/${targetH},iw)`;
+      const oh = `0.85*if(gte(iw/ih,${targetW}/${targetH}),ih,iw*${targetH}/${targetW})`;
+      filterParts.push(`[${vGradeLabel}]crop=w='${ow}':h='${oh}':x='(iw-ow)/2':y='clip((ih-oh)/2 - (t*12*${intensity.toFixed(3)}),0,max(0,ih-oh))',scale=${targetW}:${targetH}:flags=fast_bilinear,setsar=1[${vConformedLabel}]`);
     } else if (selectedMode === 'stadium-god-mode') {
-      // Stadium God Mode horizontal shifting pan crop
-      filterParts.push(`[${vGradeLabel}]crop=w=iw-100:h=ih:x='(iw-ow)/2 + sin(t*2)*50',scale=1080:1920:flags=fast_bilinear,setsar=1[${vConformedLabel}]`);
+      // Stadium God Mode horizontal shifting pan crop, aspect-ratio safe
+      const ow = `0.9*if(gte(iw/ih,${targetW}/${targetH}),ih*${targetW}/${targetH},iw)`;
+      const oh = `0.9*if(gte(iw/ih,${targetW}/${targetH}),ih,iw*${targetH}/${targetW})`;
+      filterParts.push(`[${vGradeLabel}]crop=w='${ow}':h='${oh}':x='clip((iw-ow)/2 + sin(t*2)*50,0,max(0,iw-ow))':y='(ih-oh)/2',scale=${targetW}:${targetH}:flags=fast_bilinear,setsar=1[${vConformedLabel}]`);
     } else {
-      // Fallback center-crop to 9:16 portrait
-      const conformer = `scale=w='if(gte(iw/ih,1080/1920),-1,1080)':h='if(gte(iw/ih,1080/1920),1920,-1)':flags=fast_bilinear,crop=1080:1920:(iw-1080)/2:(ih-1920)/2,setsar=1`;
+      // Fallback center-crop to target resolution aspect ratio
+      const conformer = `scale=w='if(gte(iw/ih,${targetW}/${targetH}),-1,${targetW})':h='if(gte(iw/ih,${targetW}/${targetH}),${targetH},-1)':flags=fast_bilinear,crop=${targetW}:${targetH}:(iw-${targetW})/2:(ih-${targetH})/2,setsar=1`;
       filterParts.push(`[${vGradeLabel}]${conformer}[${vConformedLabel}]`);
     }
 

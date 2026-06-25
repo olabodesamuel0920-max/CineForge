@@ -738,6 +738,7 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
 
     // Apply pre-stabilization if requested
     mqSettings = payload.blueprint.max_quality_settings || null;
+    console.log(`[AutoDirector Worker] Received MaxQuality Settings:`, JSON.stringify(mqSettings, null, 2));
 
     // Extract transients and conform timeline early for duration check and disk space estimate
     let transients: number[] = [];
@@ -1140,6 +1141,7 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
       nextInputIndex++;
     });
 
+    const isPortrait = payload.blueprint.export?.resolution ? payload.blueprint.export.resolution[1] > payload.blueprint.export.resolution[0] : true;
     const { filterComplex, videoMap, audioMap, hasAudio: outputHasAudio } = buildFilterComplex(
       conformedTimeline,
       payload.blueprint.color_grade,
@@ -1152,7 +1154,8 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
       undefined,
       soundEvents,
       soundSettings,
-      assetIdToInputIndex
+      assetIdToInputIndex,
+      isPortrait
     );
 
     ffmpegArgs.push(
@@ -1204,7 +1207,6 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
     console.log(`[AutoDirector Worker] Running final enhancement pass...`);
     const enhancementStart = Date.now();
 
-    const isPortrait = payload.blueprint.export?.resolution ? payload.blueprint.export.resolution[1] > payload.blueprint.export.resolution[0] : true;
     let targetW = isPortrait ? 1080 : 1920;
     let targetH = isPortrait ? 1920 : 1080;
     const targetRes = mqSettings?.resolution || '1080p';
@@ -1284,7 +1286,21 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
       encoderPathUsed = 'Software';
     }
 
-    const hasEnhancements = mqSettings && (mqSettings.denoise || mqSettings.sharpen || mqSettings.colorRecovery || targetRes !== '1080p');
+    let intermediateW = 0;
+    let intermediateH = 0;
+    try {
+      if (fs.existsSync(localRawOutputPath)) {
+        const intermediateMeta = parseVideoMetadata(localRawOutputPath);
+        intermediateW = intermediateMeta.width;
+        intermediateH = intermediateMeta.height;
+        console.log(`[AutoDirector Worker] Intermediate conformed video resolution: ${intermediateW}x${intermediateH}`);
+      }
+    } catch (metaErr) {
+      console.error('[AutoDirector Worker] Failed to parse intermediate conformed video resolution:', metaErr);
+    }
+
+    const needsScale = intermediateW !== targetW || intermediateH !== targetH;
+    const hasEnhancements = (mqSettings && (mqSettings.denoise || mqSettings.sharpen || mqSettings.colorRecovery || targetRes !== '1080p')) || needsScale;
 
     if (hasEnhancements && fs.existsSync(localRawOutputPath)) {
       console.log(`[AutoDirector Worker] Enhancements found. Building enhancement pass command with filters: ${filterParts.join(',')}`);

@@ -129,6 +129,10 @@ CRITICAL PACING, TRANSITION, AND FRACTURE LAWS:
 5. TEXT OVERLAYS: 
    - The 'title' field is STRICTLY for internal structural block names (e.g., 'Atmospheric Opener', 'Subject Introduction & Motion', 'Kinetic Drop & Peak VFX', 'Detail Sequence', 'Intro Narrative Hook', 'Climax', 'Outro', 'CTA Block'). These structural titles are internal and will NOT be rendered as overlays.
    - The 'caption' field is for the actual viewer-facing text overlay (such as a hook caption, brand line, call-to-action, subtitle, or caption). If a block should not show any text overlay, you MUST set 'caption' to an empty string "".
+6. CAPTION LIMITATION & VARIETY LAWS:
+   - You MUST limit the number of blocks with a non-empty \`caption\` to a maximum of 2 to 3 captions per short clip. Most blocks should have \`caption\` set to an empty string \`""\`. Do not spam captions.
+   - Captions must be brief, punchy, and highly varied. Never repeat the exact same caption text, and never use repetitive or redundant phrases. Each caption must be unique and serve a distinct narrative purpose.
+   - Clean cinematic edits are encouraged to have no captions at all if the visual storytelling is strong.
 
 Ensure you scale the pacing parameters, cut frequencies, and visual intensity based on these constraints. For instance, vertical formats like TikTok or YouTube Shorts need immediate high-impact hooks and rapid speed ramping, whereas YouTube landscape clips can support a slower cinematic build-up.`;
 
@@ -256,6 +260,10 @@ Ensure you scale the pacing parameters, cut frequencies, and visual intensity ba
     // --- Normalization Loop ---
     let currentStart = 0.0;
     const maxDuration = videoDuration !== undefined ? videoDuration : duration;
+    
+    let nonColouredCaptionsCount = 0;
+    const seenCaptions = new Set<string>();
+
     const finalBlocks = parsedLlmOutput.timelineBlocks.map((block, index) => {
       let start = currentStart;
       let end = block.endTime;
@@ -275,6 +283,22 @@ Ensure you scale the pacing parameters, cut frequencies, and visual intensity ba
       block.endTime = end;
       currentStart = end;
 
+      // Programmatically restrict captions to prevent spam, repetition, or over-captioning
+      let captionText = (block.caption || '').trim();
+      if (captionText) {
+        const normalizedCap = captionText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+        const alreadySeen = seenCaptions.has(normalizedCap);
+        const limitReached = nonColouredCaptionsCount >= 3;
+        
+        if (alreadySeen || limitReached) {
+          console.log(`[AI Blueprint Post-Process] Clearing caption "${captionText}" (Reason: ${alreadySeen ? 'Duplicate' : 'Limit Exceeded'})`);
+          captionText = '';
+        } else {
+          seenCaptions.add(normalizedCap);
+          nonColouredCaptionsCount++;
+        }
+      }
+
       // Compile back to strict Domain interface model type
       return {
         id: `cf-${Math.random().toString(36).substring(2, 9)}`,
@@ -285,7 +309,7 @@ Ensure you scale the pacing parameters, cut frequencies, and visual intensity ba
         audioAction: block.audioAction,
         speedRamp: block.speedRamp,
         fracture: block.fracture,
-        caption: block.caption
+        caption: captionText
       };
     });
 
