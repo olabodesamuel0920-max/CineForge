@@ -142,7 +142,7 @@ export async function POST(request: Request) {
     const isDemo = project.sourceType === 'demo' || project.mediaFilename === 'promo.mp4' || project.mediaFilename === '/uploads/promo.mp4';
     const sourceVideoGcsUrl = isDemo
       ? `gs://${bucketName}/raw/promo.mp4`
-      : `gs://${bucketName}/raw/${project.mediaFilename}`;
+      : (project.sourceUrl?.startsWith('gs://') ? project.sourceUrl : `gs://${bucketName}/${project.sourceUrl || `raw/${project.mediaFilename}`}`);
 
     const renderPayload = {
       sourceVideoGcsUrl,

@@ -93,6 +93,7 @@ export interface Project {
 }
 
 export interface CreateProjectInput {
+  id?: string;
   title: string;
   selectedMode: string;
   maxQualityMode: boolean;

@@ -30,6 +30,7 @@ export default function StudioPage() {
   const [sourceType, setSourceType] = useState<'upload' | 'demo'>('upload');
   const [sourceUrl, setSourceUrl] = useState<string | undefined>(undefined);
   const [selectedNiche, setSelectedNiche] = useState<string>('all');
+  const [projectId, setProjectId] = useState<string>('');
   
   // Validation error state
   const [error, setError] = useState<string | null>(null);
@@ -54,9 +55,12 @@ export default function StudioPage() {
     setError(null);
   };
 
-  // Mount logic: Parse URL parameters
+  // Mount logic: Parse URL parameters and generate project UUID
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      const uuid = window.crypto?.randomUUID ? window.crypto.randomUUID() : Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      setProjectId(uuid);
+
       const params = new URLSearchParams(window.location.search);
       const presetId = params.get('preset');
       if (presetId) {
@@ -98,7 +102,7 @@ export default function StudioPage() {
     setMediaSize(sizeStr);
     setVideoDuration(metadata.duration);
     setSourceType(metadata.sourceType || 'upload');
-    setSourceUrl(metadata.sourceUrl);
+    setSourceUrl(metadata.sourceUrl || metadata.filePath);
     setError(null);
   };
 
@@ -164,6 +168,7 @@ export default function StudioPage() {
 
       // 2. Create project in localStorage or Supabase and pass compiled blueprint
       await createProject({
+        id: projectId,
         title,
         selectedMode,
         maxQualityMode,
@@ -361,6 +366,7 @@ export default function StudioPage() {
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs text-gray-300 font-bold uppercase tracking-wide">Upload Clip</label>
                 <StudioUpload 
+                  projectId={projectId}
                   onFileSelect={handleFileSelect} 
                   selectedFilename={mediaFilename} 
                   onClear={handleClearFile} 

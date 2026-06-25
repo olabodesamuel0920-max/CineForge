@@ -304,7 +304,8 @@ export default function ProjectDetailPage() {
         body: JSON.stringify({
           fileName: file.name,
           contentType: file.type,
-          fileSize: file.size
+          fileSize: file.size,
+          projectId: project?.id
         })
       });
 
@@ -329,6 +330,9 @@ export default function ProjectDetailPage() {
         const form = new FormData();
         form.append('file', file);
         form.append('fileName', negotiateData.fileName);
+        if (project?.id) {
+          form.append('projectId', project.id);
+        }
         xhr.send(form);
       } else {
         xhr.open('PUT', uploadUrl);

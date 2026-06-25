@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     // --- CASE A: Negotiation JSON Request (Cloud Presigned URL / Local Target Check) ---
     if (contentTypeHeader.includes('application/json')) {
       const body = await request.json();
-      const { fileName, contentType, fileSize } = body;
+      const { fileName, contentType, fileSize, projectId } = body;
 
       if (!fileName || !contentType || !fileSize) {
         return NextResponse.json(
@@ -80,17 +80,28 @@ export async function POST(request: Request) {
         );
       }
 
+      if (fileSize > MAX_SIZE_LIMIT) {
+        return NextResponse.json(
+          { error: 'Payload exceeds the 100MB limit constraint.' },
+          { status: 413 }
+        );
+      }
+
       const sanitizedName = getSanitizedFilename(fileName);
       const isLocal = process.env.RENDER_MODE === 'local';
       const storage = getStorageClient();
 
       if (isLocal || !storage) {
         // Return local upload target instructions
+        const localPath = projectId
+          ? `/uploads/user-uploads/${projectId}/${sanitizedName}`
+          : `/uploads/${sanitizedName}`;
+
         return NextResponse.json({
           success: true,
           mode: 'local',
           uploadUrl: '/api/upload',
-          filePath: `/uploads/${sanitizedName}`,
+          filePath: localPath,
           fileName: sanitizedName,
           fileSize,
           contentType
@@ -99,7 +110,11 @@ export async function POST(request: Request) {
         // Cloud Mode: Generate GCP V4 Presigned PUT URL
         try {
           const bucketName = process.env.GCS_BUCKET_NAME || 'cineforge-media-bucket';
-          const file = storage.bucket(bucketName).file(`raw/${sanitizedName}`);
+          const gcsKey = projectId
+            ? `raw/user-uploads/${projectId}/${sanitizedName}`
+            : `raw/${sanitizedName}`;
+
+          const file = storage.bucket(bucketName).file(gcsKey);
 
           const [uploadUrl] = await file.getSignedUrl({
             version: 'v4',
@@ -112,18 +127,22 @@ export async function POST(request: Request) {
             success: true,
             mode: 'cloud',
             uploadUrl,
-            filePath: `gs://${bucketName}/raw/${sanitizedName}`,
+            filePath: `gs://${bucketName}/${gcsKey}`,
             fileName: sanitizedName,
             fileSize,
             contentType
           });
         } catch (e) {
           console.warn('GCS Presigned URL generation failed. Defaulting upload route to local mode.', e);
+          const localPath = projectId
+            ? `/uploads/user-uploads/${projectId}/${sanitizedName}`
+            : `/uploads/${sanitizedName}`;
+
           return NextResponse.json({
             success: true,
             mode: 'local',
             uploadUrl: '/api/upload',
-            filePath: `/uploads/${sanitizedName}`,
+            filePath: localPath,
             fileName: sanitizedName,
             fileSize,
             contentType
@@ -137,6 +156,7 @@ export async function POST(request: Request) {
       const formData = await request.formData();
       const file = formData.get('file') as File;
       const explicitFileName = formData.get('fileName') as string | null;
+      const projectId = formData.get('projectId') as string | null;
 
       if (!file) {
         return NextResponse.json({ error: 'Multipart parameter error: Missing file field.' }, { status: 400 });
@@ -155,8 +175,11 @@ export async function POST(request: Request) {
 
       const sanitizedName = explicitFileName || getSanitizedFilename(file.name);
       
-      // Ensure target public/uploads directory exists
-      const uploadDir = path.join(process.cwd(), 'public', 'uploads');
+      // Ensure target directory exists (either with nested projectId or default public/uploads)
+      const uploadDir = projectId
+        ? path.join(process.cwd(), 'public', 'uploads', 'user-uploads', projectId)
+        : path.join(process.cwd(), 'public', 'uploads');
+
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
@@ -192,10 +215,14 @@ export async function POST(request: Request) {
         pump();
       });
 
+      const localPath = projectId
+        ? `/uploads/user-uploads/${projectId}/${sanitizedName}`
+        : `/uploads/${sanitizedName}`;
+
       return NextResponse.json({
         success: true,
         mode: 'local',
-        filePath: `/uploads/${sanitizedName}`,
+        filePath: localPath,
         fileName: sanitizedName,
         fileSize: file.size,
         contentType: file.type

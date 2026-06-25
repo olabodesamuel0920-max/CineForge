@@ -205,20 +205,28 @@ export async function createProject(input: CreateProjectInput, customBlueprint?:
 
     const dbStatus = 'draft';
 
+    const insertPayload: any = {
+      user_id: user.id,
+      title: input.title || 'Untitled Edit',
+      selected_mode: input.selectedMode,
+      viewer_emotion: blueprint.viewerEmotion,
+      duration: input.duration,
+      platform: input.platform,
+      status: dbStatus,
+      media_filename: input.mediaFilename || 'uploaded_media.mp4',
+      max_quality_mode: input.maxQualityMode,
+      media_size: input.mediaSize || '14.2 MB',
+      source_type: input.sourceType || 'upload',
+      source_url: input.sourceUrl
+    };
+
+    if (input.id) {
+      insertPayload.id = input.id;
+    }
+
     const { data: projectRow, error: projectError } = await client
       .from('projects')
-      .insert({
-        user_id: user.id,
-        title: input.title || 'Untitled Edit',
-        selected_mode: input.selectedMode,
-        viewer_emotion: blueprint.viewerEmotion,
-        duration: input.duration,
-        platform: input.platform,
-        status: dbStatus,
-        media_filename: input.mediaFilename || 'uploaded_media.mp4',
-        max_quality_mode: input.maxQualityMode,
-        media_size: input.mediaSize || '14.2 MB'
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
@@ -286,7 +294,9 @@ export async function updateProject(project: Project): Promise<Project> {
         media_filename: project.mediaFilename,
         status: dbStatus,
         max_quality_mode: project.maxQualityMode,
-        media_size: project.mediaSize
+        media_size: project.mediaSize,
+        source_type: project.sourceType,
+        source_url: project.sourceUrl
       })
       .eq('id', project.id)
       .eq('user_id', user.id);

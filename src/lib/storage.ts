@@ -21,7 +21,7 @@ export function getLocalProjects(): Project[] {
 
 export function saveLocalProject(input: CreateProjectInput, customBlueprint?: EditDNABlueprint): Project {
   // Generate a local timestamp-based ID or random ID
-  const id = Math.random().toString(36).substring(2, 11);
+  const id = input.id || Math.random().toString(36).substring(2, 11);
   const createdAt = new Date().toISOString();
 
   const status = {

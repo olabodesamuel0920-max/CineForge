@@ -14,6 +14,7 @@ export interface UploadedFileMetadata {
 }
 
 interface StudioUploadProps {
+  projectId: string;
   onFileSelect: (metadata: UploadedFileMetadata) => void;
   selectedFilename: string | null;
   onClear: () => void;
@@ -21,7 +22,7 @@ interface StudioUploadProps {
 
 type UploadStatus = 'IDLE' | 'PREVIEWING' | 'NEGOTIATING' | 'UPLOADING' | 'COMPLETED' | 'FAILED';
 
-export default function StudioUpload({ onFileSelect, selectedFilename, onClear }: StudioUploadProps) {
+export default function StudioUpload({ projectId, onFileSelect, selectedFilename, onClear }: StudioUploadProps) {
   const [status, setStatus] = useState<UploadStatus>('IDLE');
   const [dragActive, setDragActive] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -97,6 +98,23 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
   const processFile = async (file: File) => {
     if (!file) return;
 
+    // Early validation checks
+    const allowedTypes = [
+      'video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska',
+      'image/png', 'image/jpeg', 'image/jpg', 'image/webp'
+    ];
+    if (!allowedTypes.includes(file.type.toLowerCase())) {
+      setStatus('FAILED');
+      setErrorMsg('Unsupported format: CineForge accepts standard video formats (MP4, MOV, WebM) and image assets.');
+      return;
+    }
+
+    if (file.size > 100 * 1024 * 1024) {
+      setStatus('FAILED');
+      setErrorMsg('Upload too large: Media file exceeds the 100MB safety threshold limit.');
+      return;
+    }
+
     // Stage 1: Local preview URL compilation
     const previewUrl = URL.createObjectURL(file);
     setObjectUrl(previewUrl);
@@ -132,7 +150,8 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
         body: JSON.stringify({
           fileName: file.name,
           contentType: file.type,
-          fileSize: file.size
+          fileSize: file.size,
+          projectId: projectId
         })
       });
 
@@ -160,15 +179,23 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
           if (xhr.status >= 200 && xhr.status < 300) {
             resolve();
           } else {
-            try {
-              const res = JSON.parse(xhr.responseText);
-              reject(new Error(res.error || `Upload failed (Status ${xhr.status})`));
-            } catch {
-              reject(new Error(`Upload failed with status code ${xhr.status}.`));
+            if (xhr.status === 403) {
+              reject(new Error('Storage permission failed: Access denied by Cloud Storage policies. CORS or role key mismatch.'));
+            } else if (xhr.status === 400 || xhr.status === 401) {
+              reject(new Error('Upload session expired: The signed upload link has expired. Please clear and retry.'));
+            } else {
+              try {
+                const res = JSON.parse(xhr.responseText);
+                reject(new Error(res.error || `Upload failed (Status ${xhr.status})`));
+              } catch {
+                reject(new Error(`Upload failed with status code ${xhr.status}.`));
+              }
             }
           }
         });
-        xhr.addEventListener('error', () => reject(new Error('Network dispatch connection failure.')));
+        xhr.addEventListener('error', () => {
+          reject(new Error('Network failed or CORS configuration block. Confirm internet connection and GCS bucket permissions.'));
+        });
         xhr.addEventListener('abort', () => reject(new Error('Upload request aborted.')));
       });
 
@@ -177,6 +204,9 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
         const form = new FormData();
         form.append('file', file);
         form.append('fileName', fileName);
+        if (projectId) {
+          form.append('projectId', projectId);
+        }
         xhr.send(form);
       } else {
         // Direct binary upload targeting GCS bucket Presigned URL
@@ -193,7 +223,8 @@ export default function StudioUpload({ onFileSelect, selectedFilename, onClear }
         fileName,
         fileSize,
         contentType,
-        duration: videoDuration
+        duration: videoDuration,
+        sourceUrl: filePath
       };
 
       setMeta(completedMeta);
