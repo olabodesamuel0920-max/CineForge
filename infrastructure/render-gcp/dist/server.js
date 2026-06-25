@@ -1089,7 +1089,8 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
             codec = isH264QsvSupported ? 'h264_qsv' : 'libx264';
             bitrateArgs = ['-b:v', '7M', '-maxrate', '9M', '-bufsize', '14M'];
         }
-        ffmpegArgs.push('-c:v', codec, ...bitrateArgs, '-preset', 'veryfast', '-r', fps.toString(), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
+        const preset = codec === 'libx265' ? 'ultrafast' : 'veryfast';
+        ffmpegArgs.push('-c:v', codec, ...bitrateArgs, '-preset', preset, '-r', fps.toString(), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
         if (outputHasAudio) {
             ffmpegArgs.push('-c:a', 'aac', '-b:a', '192k');
         }
@@ -1209,13 +1210,14 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
         if (hasEnhancements && fs.existsSync(localRawOutputPath)) {
             console.log(`[AutoDirector Worker] Enhancements found. Building enhancement pass command with filters: ${filterParts.join(',')}`);
             const threadArgs = targetRes === '16K' ? ['-threads', '4'] : [];
+            const activePreset = activeCodec === 'libx265' ? 'ultrafast' : 'veryfast';
             const enhanceArgs = [
                 '-y',
                 '-i', localRawOutputPath,
                 '-vf', filterParts.join(','),
                 '-c:v', activeCodec,
                 ...activeBitrateArgs,
-                '-preset', 'veryfast',
+                '-preset', activePreset,
                 ...threadArgs,
                 '-pix_fmt', 'yuv420p',
                 '-movflags', '+faststart',
@@ -1237,7 +1239,7 @@ queue_1.renderQueueManager.executeRenderRunner = async (job) => {
                         '-vf', filterParts.join(','),
                         '-c:v', activeCodec,
                         ...activeBitrateArgs,
-                        '-preset', 'veryfast',
+                        '-preset', activePreset,
                         '-pix_fmt', 'yuv420p',
                         '-movflags', '+faststart',
                         '-c:a', 'copy',

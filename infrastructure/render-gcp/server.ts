@@ -1180,10 +1180,11 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
       bitrateArgs = ['-b:v', '7M', '-maxrate', '9M', '-bufsize', '14M'];
     }
 
+    const preset = codec === 'libx265' ? 'ultrafast' : 'veryfast';
     ffmpegArgs.push(
       '-c:v', codec,
       ...bitrateArgs,
-      '-preset', 'veryfast',
+      '-preset', preset,
       '-r', fps.toString(),
       '-pix_fmt', 'yuv420p',
       '-movflags', '+faststart'
@@ -1305,13 +1306,14 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
     if (hasEnhancements && fs.existsSync(localRawOutputPath)) {
       console.log(`[AutoDirector Worker] Enhancements found. Building enhancement pass command with filters: ${filterParts.join(',')}`);
       const threadArgs = targetRes === '16K' ? ['-threads', '4'] : [];
+      const activePreset = activeCodec === 'libx265' ? 'ultrafast' : 'veryfast';
       const enhanceArgs = [
         '-y',
         '-i', localRawOutputPath,
         '-vf', filterParts.join(','),
         '-c:v', activeCodec,
         ...activeBitrateArgs,
-        '-preset', 'veryfast',
+        '-preset', activePreset,
         ...threadArgs,
         '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',
@@ -1334,7 +1336,7 @@ renderQueueManager.executeRenderRunner = async (job: RenderJob) => {
             '-vf', filterParts.join(','),
             '-c:v', activeCodec,
             ...activeBitrateArgs,
-            '-preset', 'veryfast',
+            '-preset', activePreset,
             '-pix_fmt', 'yuv420p',
             '-movflags', '+faststart',
             '-c:a', 'copy',
